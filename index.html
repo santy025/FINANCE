@@ -537,8 +537,8 @@ function applyAccent(){
 /* ---------- STATE ---------- */
 let S = null;
 const DEFAULT = ()=>({
-  v:2, profile:{name:'',income:0,savingsRate:20,payFreq:'monthly',paydays:[30],theme:'dark',onboarded:false,retRate:11,photo:'',accent:'aurora',hints:{},monthlyBudget:0,notif:{on:false,pagos:true,topes:true,deudas:true,flujos:true},notifSeen:[],notifLastVisit:null},
-  accounts:[], tx:[], goals:[], debts:[], recurring:[], nwHist:[], budgets:{}, chains:[], notifFired:{}
+  v:2, profile:{name:'',income:0,savingsRate:20,payFreq:'monthly',paydays:[30],theme:'dark',onboarded:false,retRate:11,photo:'',accent:'aurora',hints:{},monthlyBudget:0,notif:{on:false,pagos:true,topes:true,deudas:true,cobros:true,flujos:true},notifSeen:[],notifLastVisit:null},
+  accounts:[], tx:[], goals:[], debts:[], recurring:[], nwHist:[], budgets:{}, chains:[], receivables:[], notifFired:{}, notifFired:{}
 });
 /* rellena campos faltantes y migra formatos viejos (nunca pierde datos) */
 function normalize(st){
@@ -546,11 +546,12 @@ function normalize(st){
   st.profile=Object.assign({name:'',income:0,savingsRate:20,payFreq:'monthly',paydays:[30],theme:'dark',retRate:11,onboarded:false,photo:'',accent:'aurora'},st.profile||{});
   if((!st.profile.paydays||!st.profile.paydays.length)){st.profile.paydays=st.profile.payday?[st.profile.payday]:defaultPaydays(st.profile.payFreq);}
   if(!FREQS[st.profile.payFreq])st.profile.payFreq='monthly';
-  ['accounts','tx','goals','debts','recurring','nwHist','chains'].forEach(k=>{if(!Array.isArray(st[k]))st[k]=[];});
+  ['accounts','tx','goals','debts','recurring','nwHist','chains','receivables'].forEach(k=>{if(!Array.isArray(st[k]))st[k]=[];});
+  st.receivables.forEach(r=>{r.collected=r.collected||0;r.amount=r.amount||0;if(!r.dueDate)r.dueDate='';});
   if(!st.budgets||typeof st.budgets!=='object')st.budgets={};
   if(!st.profile.hints||typeof st.profile.hints!=='object')st.profile.hints={};
   if(typeof st.profile.monthlyBudget!=='number')st.profile.monthlyBudget=0;
-  st.profile.notif=Object.assign({on:false,pagos:true,topes:true,deudas:true,flujos:true},st.profile.notif||{});
+  st.profile.notif=Object.assign({on:false,pagos:true,topes:true,deudas:true,cobros:true,flujos:true},st.profile.notif||{});
   if(!Array.isArray(st.profile.notifSeen))st.profile.notifSeen=[];
   if(st.profile.notifLastVisit===undefined)st.profile.notifLastVisit=null;
   if(!st.notifFired||typeof st.notifFired!=='object')st.notifFired={};
@@ -640,7 +641,8 @@ function fmtMY(d){return new Date(d).toLocaleDateString('es-CO',{month:'short',y
 /* =================== MOTOR FINANCIERO =================== */
 function assetsOf(s){return sum(s.accounts.filter(a=>a.type!=='credit').map(a=>a.balance));}
 function liabOf(s){return sum(s.accounts.filter(a=>a.type==='credit').map(a=>Math.abs(a.balance)))+sum(s.debts.map(d=>d.balance));}
-function netWorth(s){return assetsOf(s)-liabOf(s);}
+function receivablesTotal(s){return sum((s.receivables||[]).map(r=>Math.max(0,(r.amount||0)-(r.collected||0))));}
+function netWorth(s){return assetsOf(s)+receivablesTotal(s)-liabOf(s);}
 function availableOf(s){return sum(s.accounts.filter(a=>LIQUID.includes(a.type)).map(a=>a.balance));}
 function savingsBal(s){return sum(s.accounts.filter(a=>a.type==='savings'||a.type==='investment').map(a=>a.balance));}
 function totalSaved(s){return sum(s.tx.filter(t=>t.type==='saving'||t.type==='investment').map(t=>t.amount));}
@@ -903,9 +905,12 @@ function monthSummary(s,off){
   Object.keys(s.budgets||{}).forEach(id=>{const lim=s.budgets[id];if(lim>0){budTot++;if((cats[id]||0)<=lim)budOk++;}});
   // patrimonio: cambio del mes desde nwHist
   const k=mkey(d), idx=s.nwHist.findIndex(x=>x.key? x.key===k : x.k===k);
-  let nwCh=0; const key=x=>x.k||x.key;
+  let nwCh=0,growthPct=0; const key=x=>x.k||x.key;
   const hi=s.nwHist.findIndex(x=>key(x)===k);
-  if(hi>0)nwCh=s.nwHist[hi].v-s.nwHist[hi-1].v; else if(hi===0&&s.nwHist.length>1)nwCh=0;
+  if(hi>0){nwCh=s.nwHist[hi].v-s.nwHist[hi-1].v; const pv=s.nwHist[hi-1].v; growthPct=pv>0?Math.round(nwCh/pv*100):0;}
+  // ingresos por fuente
+  const incCats={}; s.tx.filter(t=>t.type==='income'&&sameMonth(t.date,d)).forEach(t=>{incCats[t.category]=(incCats[t.category]||0)+t.amount;});
+  const incTop=Object.entries(incCats).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([kk,v])=>({cat:catOf('income',kk),v}));
   // grado del mes
   let pts=0;
   if(inc>0&&exp<inc)pts+=2; if(rate>=20)pts+=2; else if(rate>=10)pts+=1;
@@ -913,7 +918,7 @@ function monthSummary(s,off){
   const grades=[['C','Puedes mejorar','var(--orange)'],['C','Puedes mejorar','var(--orange)'],['B','Vas bien','var(--gold)'],['B','Vas bien','var(--gold)'],['B+','Muy bien','var(--cyan)'],['A','Excelente','var(--emerald)'],['A','Excelente','var(--emerald)'],['A+','¡Brutal!','var(--emerald)']];
   const g=grades[clamp(pts,0,7)];
   const monthName2=d.toLocaleDateString('es-CO',{month:'long',year:'numeric'});
-  return {inc,exp,sav,rate,top,budOk,budTot,nwCh,grade:g[0],gradeLabel:g[1],gradeColor:g[2],monthName:monthName2,net:inc-exp};
+  return {inc,exp,sav,rate,top,incTop,budOk,budTot,nwCh,growthPct,grade:g[0],gradeLabel:g[1],gradeColor:g[2],monthName:monthName2,net:inc-exp};
 }
 /* aplica (+1) o revierte (-1) el efecto de un movimiento — usado al editar */
 function applyTxEffect(t,sign){
@@ -924,6 +929,7 @@ function applyTxEffect(t,sign){
     if(t.goalId){const g=S.goals.find(x=>x.id===t.goalId);if(g)g.saved=Math.max(0,g.saved+sign*t.amount);}
     if(t.chainId){const c=S.chains.find(x=>x.id===t.chainId);if(c)c.saved=Math.max(0,(c.saved||0)+sign*t.amount);}}
   else if(t.type==='debt'){const a=A(t.accountId);if(a)a.balance-=sign*t.amount;if(t.debtId){const d=S.debts.find(x=>x.id===t.debtId);if(d)d.balance-=sign*t.amount;}}
+  else if(t.type==='collect'){const a=A(t.accountId);if(a)a.balance+=sign*t.amount;if(t.receivableId){const rc=(S.receivables||[]).find(x=>x.id===t.receivableId);if(rc)rc.collected=Math.max(0,(rc.collected||0)+sign*t.amount);}}
 }
 function relDays(d){const now=new Date(),t=new Date(now.getFullYear(),now.getMonth(),now.getDate());const dd=Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate())-t)/864e5);return dd<=0?'hoy':dd===1?'mañana':'en '+dd+' días';}
 function upcomingPayments(s,days){
@@ -951,6 +957,7 @@ function notifItems(s){
     else if(mb>0&&spentM>=mb*.85)out.push({key:'budT85:'+mk,icon:'⚠️',title:'Cerca del tope del mes',body:`Vas al ${Math.round(spentM/mb*100)}% de tu presupuesto.`,pr:1});
     budgetStatus(s).forEach(x=>{if(x.spent>x.lim)out.push({key:'bud:'+x.id+':'+mk,icon:'🚨',title:'Presupuesto excedido',body:`${x.cat.n}: ${fmt(x.spent)} de ${fmt(x.lim)}.`,pr:2});else if(x.pct>=.85)out.push({key:'bud85:'+x.id+':'+mk,icon:'📊',title:'Presupuesto al límite',body:`${x.cat.n}: vas al ${Math.round(x.pct*100)}%.`,pr:1});});}
   if(P.deudas!==false){s.debts.forEach(d=>{if(d.balance>0)out.push({key:'debt:'+d.id+':'+mk,icon:'💳',title:'Recuerda tu deuda',body:`${d.name}: debes ${fmt(d.balance)}. Abona este mes para avanzar.`,pr:1});});}
+  if(P.cobros!==false){(s.receivables||[]).forEach(rc=>{const rem=(rc.amount||0)-(rc.collected||0);if(rem>0&&rc.dueDate){const d=new Date(rc.dueDate+'T00:00'),dn=relDaysNum(d);if(dn<=7)out.push({key:'rcv:'+rc.id+':'+rc.dueDate,icon:'🤝',title:dn<0?'Cobro vencido':dn===0?'Cobro hoy':'Por cobrar '+relDays(d),body:`${rc.name} te debe ${fmt(rem)} · vence ${fmtDayShort(d)}`,pr:dn<=0?2:1,act:'editreceivable',rid:rc.id});}});}
   if(P.flujos!==false&&now.getDate()<=5){const pm=new Date(now.getFullYear(),now.getMonth()-1,1);out.push({key:'sum:'+mkey(pm),icon:'📅',title:'Tu resumen está listo',body:`Mira tu cierre de ${pm.toLocaleDateString('es-CO',{month:'long'})}.`,pr:1,act:'monthsummary',off:-1});}
   if(P.flujos!==false&&PREV_VISIT){const auto=s.tx.filter(t=>(t.recur||t.chainId)&&t.date>PREV_VISIT);
     if(auto.length)out.push({key:'auto:'+PREV_VISIT+':'+auto.length,icon:'🔄',title:'Movimientos automáticos',body:`Se registraron ${auto.length} pago(s)/aporte(s) automáticos desde tu última visita.`,pr:1});}
@@ -1093,11 +1100,11 @@ function countUp(){document.querySelectorAll('[data-cnt]').forEach(el=>{
 
 function txRow(t){
   const cat=catOf(t.type,t.category);
-  const emoji=t.type==='saving'?'🔒':t.type==='investment'?'📈':t.type==='transfer'?'🔄':t.type==='debt'?'💳':cat.e;
-  const sign=t.type==='income'?'+':t.type==='expense'?'−':t.type==='debt'?'−':'';
-  const col=t.type==='income'?'up':'';
-  const name=t.note||(t.type==='saving'?'Ahorro':t.type==='investment'?'Inversión':t.type==='transfer'?'Transferencia':t.type==='debt'?'Pago de deuda':cat.n);
-  const sub=t.type==='transfer'?'Entre cuentas':(t.type==='income'||t.type==='expense')?cat.n:(accName(t)||cat.n);
+  const emoji=t.type==='saving'?'🔒':t.type==='investment'?'📈':t.type==='transfer'?'🔄':t.type==='debt'?'💳':t.type==='collect'?'🤝':cat.e;
+  const sign=t.type==='income'?'+':t.type==='collect'?'+':t.type==='expense'?'−':t.type==='debt'?'−':'';
+  const col=(t.type==='income'||t.type==='collect')?'up':'';
+  const name=t.note||(t.type==='saving'?'Ahorro':t.type==='investment'?'Inversión':t.type==='transfer'?'Transferencia':t.type==='debt'?'Pago de deuda':t.type==='collect'?'Cobro':cat.n);
+  const sub=t.type==='transfer'?'Entre cuentas':t.type==='collect'?'Cobro recibido':(t.type==='income'||t.type==='expense')?cat.n:(accName(t)||cat.n);
   return `<div class="row" data-act="tx" data-id="${t.id}"><div class="em">${emoji}</div><div class="mid"><b>${esc(name)}</b><small>${esc(sub)} · ${relDate(t.date)}</small></div><div class="amt ${col} num">${sign}${fmt(t.amount)}</div></div>`;
 }
 
@@ -1143,7 +1150,7 @@ function viewHome(){
 
   <div class="nw" style="--i:1"><div class="k">Patrimonio neto</div>
     <div class="v num" data-cnt="${Math.round(m.netWorth)}">${fmt(m.netWorth)}</div>
-    <div class="chg ${nc>=0?'up':'down'} num">${nc>=0?'▲':'▼'} ${fmtSigned(nc)} este mes</div>
+    <div class="chg ${nc>=0?'up':'down'} num">${nc>=0?'▲':'▼'} ${fmtSigned(nc)}${(()=>{const h=s.nwHist;if(h.length<2)return '';const pv=h[h.length-2].v;const gp=pv>0?Math.round(nc/pv*100):0;return gp?` (${gp>=0?'+':''}${gp}%)`:'';})()} este mes</div>
     ${chartSpark(hist)}</div>
 
   <div class="hero" style="--i:2" data-act="canbreak"><div class="tag">${svg(IC.info,2.4)} ver cálculo</div>
@@ -1162,6 +1169,7 @@ function viewHome(){
 
   <button class="treat" style="--i:5" data-act="treat"><div class="em">💭</div><div class="tx"><b>¿Me puedo dar este gusto?</b><small>Consulta cualquier compra antes de hacerla</small></div><div class="arw">${svg(IC.arrow,2.4)}</div></button>
   <button class="treat" style="--i:5;margin-top:10px" data-act="monthsummary" data-off="0"><div class="em">📅</div><div class="tx"><b>Resumen del mes</b><small>Mira tu cierre con calificación</small></div><div class="arw">${svg(IC.arrow,2.4)}</div></button>
+  ${(()=>{const rt=receivablesTotal(s),pend=(s.receivables||[]).filter(r=>((r.amount||0)-(r.collected||0))>0);if(rt<=0)return '';const next=pend.filter(r=>r.dueDate).sort((a,b)=>a.dueDate<b.dueDate?-1:1)[0];return `<button class="card" style="--i:6;margin-top:14px;display:flex;align-items:center;gap:13px;width:100%;text-align:left;border:1px solid var(--line-2)" data-act="receivableslist"><div class="em" style="width:44px;height:44px;border-radius:13px;display:grid;place-items:center;font-size:21px;background:rgba(77,166,255,.14);flex:none">🤝</div><div style="flex:1"><b style="font-size:14.5px;font-weight:800;display:block">Te deben ${fmt(rt)}</b><small style="font-size:12px;color:var(--dim);font-weight:500">${pend.length} ${pend.length===1?'persona':'personas'}${next?` · próximo: ${esc(next.name)} el ${fmtDayShort(new Date(next.dueDate+'T00:00'))}`:''}</small></div><div class="arw" style="color:var(--faint)">${svg(IC.arrow,2.4)}</div></button>`;})()}
 
   ${al.length?`<div style="--i:6;margin-top:18px">${al.map(a=>`<div class="alert ${a.c}"><div class="ab">${a.e}</div><div><b>${a.t}</b><small>${a.d}</small></div></div>`).join('')}</div>`:''}
 
@@ -1231,7 +1239,7 @@ function viewSpend(){
 }
 </script>
 <script>
-let FCH=36;
+let FCH=12;
 /* =================== GOALS =================== */
 function goalCard(g){
   const c=goalCalc(g);
@@ -1302,7 +1310,7 @@ function viewAnalysis(){
   <div class="card flowwrap" style="--i:5">${f.inc>0?chartFlow(f.inc,f.dests):`<div class="empty" style="padding:20px"><div class="ee">💳</div><p>Configura tu ingreso para ver<br>hacia dónde va cada peso.</p></div>`}</div>
 
   <div class="sect-h" style="--i:6"><h3>Patrimonio en el tiempo</h3></div>
-  <div class="card" style="--i:5"><div class="fc-tabs">${[[12,'1 año'],[36,'3 años'],[60,'5 años']].map(([mo,l])=>`<button class="${FCH===mo?'on':''}" data-act="fch" data-m="${mo}">${l}</button>`).join('')}</div>
+  <div class="card" style="--i:5"><div class="fc-tabs">${[[3,'3m'],[6,'6m'],[9,'9m'],[12,'1a'],[24,'2a']].map(([mo,l])=>`<button class="${FCH===mo?'on':''}" data-act="fch" data-m="${mo}">${l}</button>`).join('')}</div>
     ${chartForecast(fc)}
     <div class="fc-legend"><div><div class="n num" style="color:var(--faint)">${fmtShort(fc.cons[FCH])}</div><div class="l"><span class="dot" style="background:var(--faint)"></span>Conservador</div></div><div><div class="n num up">${fmtShort(fc.act[FCH])}</div><div class="l"><span class="dot" style="background:var(--emerald)"></span>Actual</div></div><div><div class="n num" style="color:var(--violet)">${fmtShort(fc.agg[FCH])}</div><div class="l"><span class="dot" style="background:var(--violet)"></span>Agresivo</div></div></div></div>
 
@@ -1313,7 +1321,7 @@ function viewAnalysis(){
 /* =================== PROFILE =================== */
 function debtPayoffMonths(d){let bal=d.balance,pay=d.minPayment||0,r=(d.rate||0)/100/12,mo=0;if(pay<=bal*r)return Infinity;while(bal>0&&mo<600){bal=bal*(1+r)-pay;mo++;}return mo;}
 function viewProfile(){
-  const s=S,p=s.profile,assets=assetsOf(s),liab=liabOf(s),nw=netWorth(s);
+  const s=S,p=s.profile,assets=assetsOf(s),liab=liabOf(s),nw=netWorth(s),rcv=receivablesTotal(s);
   const accs=s.accounts;
   return `<div class="stagger">
   <div class="hdr" style="--i:0"><div><div class="ttl">Perfil</div><div class="subtitle">Cuentas, deudas, fijos y ajustes</div></div><button class="iconbtn" data-act="editprofile">${svg(IC.edit,2.1)}</button></div>
@@ -1331,11 +1339,15 @@ function viewProfile(){
 
   <div class="sect-h" style="--i:4"><h3>Mi patrimonio</h3></div>
   <div class="card" style="--i:4"><div class="row" style="border:none;padding:7px 0"><div class="em" style="background:rgba(23,230,161,.14)">📈</div><div class="mid"><b>Activos</b><small>lo que tienes</small></div><div class="amt up num">${fmt(assets)}</div></div>
+    ${rcv>0?`<div class="row" style="border:none;padding:7px 0"><div class="em" style="background:rgba(77,166,255,.14)">🤝</div><div class="mid"><b>Por cobrar</b><small>lo que te deben</small></div><div class="amt num" style="color:var(--blue)">+${fmt(rcv)}</div></div>`:''}
     <div class="row" style="border:none;padding:7px 0"><div class="em" style="background:rgba(255,101,132,.14)">📉</div><div class="mid"><b>Pasivos</b><small>lo que debes</small></div><div class="amt num" style="color:var(--neg)">−${fmt(liab)}</div></div>
     <div class="hr"></div><div style="display:flex;justify-content:space-between;align-items:center;padding:2px 2px"><b style="font-size:15px;font-weight:800">Patrimonio neto</b><b class="num" style="font-size:20px;font-weight:900">${fmt(nw)}</b></div></div>
 
   <div class="sect-h" style="--i:5"><h3>Deudas</h3><div style="display:flex;gap:14px">${s.debts.length?'<span class="lnk" data-act="debtplan">Plan de salida</span>':''}<span class="lnk" data-act="adddebt">+ Deuda</span></div></div>
   <div class="card" style="--i:5">${s.debts.length?s.debts.map(d=>{const mo=debtPayoffMonths(d);return `<div class="acc" data-act="editdebt" data-id="${d.id}"><div class="ae">💳</div><div class="an"><b>${esc(d.name)}</b><small>${d.rate?d.rate+'% E.A. · ':''}cuota ${fmtShort(d.minPayment)}</small></div><div class="as"><b class="num" style="color:var(--neg)">${fmt(d.balance)}</b><small>${isFinite(mo)?'libre '+fmtMY(addMonths(new Date(),mo)):'ajusta la cuota'}</small></div></div>`;}).join(''):`<div class="empty" style="padding:18px"><p>Sin deudas registradas. 🎉</p></div>`}</div>
+
+  <div class="sect-h" style="--i:5"><h3>Me deben${rcv>0?` · ${fmtShort(rcv)}`:''}</h3><div style="display:flex;gap:14px">${(s.receivables&&s.receivables.length)?'<span class="lnk" data-act="receivableslist">Ver todo</span>':''}<span class="lnk" data-act="addreceivable">+ Agregar</span></div></div>
+  <div class="card" style="--i:5">${(s.receivables&&s.receivables.length)?s.receivables.map(r=>{const rem=Math.max(0,(r.amount||0)-(r.collected||0));const done=rem<=0;const due=r.dueDate?new Date(r.dueDate+'T00:00'):null;const dn=due?relDaysNum(due):null;const late=dn!==null&&dn<0&&!done;return `<div class="acc" data-act="editreceivable" data-id="${r.id}"><div class="ae">${done?'✅':'🤝'}</div><div class="an"><b>${esc(r.name)}</b><small>${done?'Cobrado':(due?(late?'⚠️ venció '+fmtDayShort(due):'cobrar '+fmtDayShort(due)):'sin fecha')}</small></div><div class="as"><b class="num" style="color:${done?'var(--faint)':'var(--blue)'}">${done?fmt(r.amount||0):fmt(rem)}</b>${r.collected>0&&!done?`<small>de ${fmtShort(r.amount)}</small>`:''}</div></div>`;}).join(''):`<div class="empty" style="padding:18px"><p>¿Alguien te debe plata? Regístralo<br>con su fecha de cobro y te aviso.</p><button class="btn ghost" style="max-width:220px;margin:14px auto 0" data-act="addreceivable">Agregar</button></div>`}</div>
 
   <div class="sect-h" style="--i:6"><h3>Logros</h3></div>
   <div class="badges" style="--i:6">${ACH.map(a=>`<div class="badge ${a.test(s)?'on':''}"><div class="be">${a.e}</div><div class="bl">${a.l}</div></div>`).join('')}</div>
@@ -1348,7 +1360,7 @@ function viewProfile(){
     ${perm==='denied'?`<div class="mono-small" style="margin-bottom:10px">🔕 Bloqueadas en el navegador. Actívalas en los ajustes del sitio.</div>`:''}
     ${perm==='unsupported'?`<div class="mono-small" style="margin-bottom:10px">📱 Instálala en tu pantalla de inicio para recibir avisos en el celular.</div>`:''}
     ${P.on&&perm==='granted'?`<div class="mono-small" style="margin-bottom:6px;color:var(--pos)">🔔 Activadas · te aviso al abrir la app y mientras esté abierta</div>`:''}
-    ${tgl('pagos','📅','Pagos y cobros','Lo que se viene esta semana')}${tgl('topes','📊','Topes de gasto','Cuando te acercas o te pasas')}${tgl('deudas','💳','Deudas','Recordatorio de abonar')}${tgl('flujos','🔄','Actividad y resumen','Movimientos automáticos y cierre de mes')}
+    ${tgl('pagos','📅','Pagos y cobros','Lo que se viene esta semana')}${tgl('topes','📊','Topes de gasto','Cuando te acercas o te pasas')}${tgl('deudas','💳','Deudas','Recordatorio de abonar')}${tgl('cobros','🤝','Me deben','Cuando se acerca una fecha de cobro')}${tgl('flujos','🔄','Actividad y resumen','Movimientos automáticos y cierre de mes')}
     </div>`;})()}
 
   <div class="sect-h" style="--i:7"><h3>Apariencia</h3></div>
@@ -1475,6 +1487,41 @@ function sheetTransfer(){
   <div class="field"><label>Nota</label><input id="trNote" placeholder="Opcional"></div>
   <button class="btn primary" data-act="savetransfer">Transferir</button>`);
 }
+/* ---- CUENTAS POR COBRAR (me deben) ---- */
+function sheetReceivable(item){
+  const e=item||{},rem=Math.max(0,(e.amount||0)-(e.collected||0));
+  openSheet(`<h2>${item?'Editar deuda a favor':'Alguien me debe'}</h2><div class="hd-sub">Controla lo que te deben y cuándo lo cobras</div>
+  <div class="field"><label>¿Quién te debe?</label><input id="rvName" placeholder="Ej: Camilo" value="${esc(e.name||'')}"></div>
+  <div class="field"><label>Monto que te debe</label><input id="rvAmount" inputmode="numeric" placeholder="0" value="${e.amount?e.amount.toLocaleString('es-CO'):''}" oninput="moneyInput(this)"></div>
+  <div class="field"><label>Fecha de cobro</label><input id="rvDate" type="date" value="${e.dueDate||''}"><span class="hint">Te avisaremos cuando se acerque.</span></div>
+  <div class="field"><label>Nota</label><input id="rvNote" placeholder="Opcional (ej: préstamo)" value="${esc(e.note||'')}"></div>
+  ${item&&rem>0?`<div class="mono-small" style="margin-bottom:10px">Ya cobrado: ${fmt(e.collected||0)} · Falta: ${fmt(rem)}</div>`:''}
+  <button class="btn primary" data-act="savereceivable" data-id="${e.id||''}">${item?'Guardar':'Agregar'}</button>
+  ${item?`<button class="btn ghost" style="margin-top:10px" data-act="collect" data-id="${e.id}">Registrar cobro</button><button class="btn danger" style="margin-top:10px" data-act="delreceivable" data-id="${e.id}">Eliminar</button>`:''}`);
+}
+function sheetCollect(rc){
+  const liquid=S.accounts.filter(a=>LIQUID.includes(a.type)),rem=Math.max(0,(rc.amount||0)-(rc.collected||0));
+  openSheet(`<h2>Cobrar a ${esc(rc.name)}</h2><div class="hd-sub">Te debe ${fmt(rem)}</div>
+  <div class="amtin"><span class="cur">$</span><input id="rcAmt" inputmode="numeric" placeholder="${rem.toLocaleString('es-CO')}" value="${rem.toLocaleString('es-CO')}" oninput="moneyInput(this)"></div>
+  <div class="field"><label>Entra a</label><select id="rcTo" style="width:100%;padding:14px 15px;border-radius:14px;background:var(--surface);border:1.5px solid var(--line);font-size:14px;font-weight:600">${liquid.length?accOpts(liquid,''):'<option value="__auto">Cuenta principal</option>'}</select></div>
+  <button class="btn primary" data-act="savecollect" data-id="${rc.id}">Registrar cobro</button>`);
+}
+/* ---- DETALLE: TODOS LOS QUE TE DEBEN ---- */
+function sheetReceivablesList(){
+  const rs=S.receivables||[];
+  const totalRem=receivablesTotal(S),collected=sum(rs.map(r=>r.collected||0)),pend=rs.filter(r=>((r.amount||0)-(r.collected||0))>0);
+  openSheet(`<h2>Te deben</h2><div class="hd-sub">Quién te debe, cuánto y cuándo cobrar</div>
+  <div class="bigverdict g" style="padding:16px"><div style="font-size:11px;font-weight:800;letter-spacing:.12em;opacity:.65">TOTAL POR COBRAR</div><div class="num" style="font-size:34px;font-weight:900;line-height:1;margin:5px 0">${fmt(totalRem)}</div></div>
+  <div class="vstats"><div><div class="n num">${pend.length}</div><div class="l">pendientes</div></div><div><div class="n num up">${fmtShort(collected)}</div><div class="l">ya cobrado</div></div><div><div class="n num">${rs.length}</div><div class="l">registros</div></div></div>
+  <div class="divlab">Detalle</div>
+  ${rs.length?rs.slice().sort((a,b)=>{const ra=(a.amount-(a.collected||0))<=0,rb=(b.amount-(b.collected||0))<=0;if(ra!==rb)return ra?1:-1;const da=a.dueDate||'9999',db=b.dueDate||'9999';return da<db?-1:1;}).map(r=>{const rem=Math.max(0,(r.amount||0)-(r.collected||0)),done=rem<=0;const due=r.dueDate?new Date(r.dueDate+'T00:00'):null,dn=due?relDaysNum(due):null,late=dn!==null&&dn<0&&!done;
+    return `<div class="goal" style="padding:14px"><div class="gh" style="margin-bottom:10px"><div class="gem" style="background:${done?'var(--surface-3)':'rgba(77,166,255,.15)'}">${done?'✅':'🤝'}</div><div class="gn"><b>${esc(r.name)}</b><small>${done?'Cobrado completo':(due?(late?'⚠️ venció '+relDays(due).replace('en ','hace ').replace('hace -','hace ')+' ('+fmtDayShort(due)+')':'cobrar '+relDays(due)+' · '+fmtDayShort(due)):'sin fecha de cobro')}</small></div><div class="gt num" style="color:${done?'var(--faint)':'var(--blue)'}">${fmtShort(rem)}</div></div>
+    ${r.collected>0?`<div class="prog" style="height:8px"><i style="width:${Math.round((r.collected/r.amount)*100)}%;background:var(--blue)"></i></div><div class="meta" style="margin-top:6px"><span>Cobrado <b>${fmt(r.collected)}</b> de ${fmt(r.amount)}</span><span>${Math.round(r.collected/r.amount*100)}%</span></div>`:''}
+    ${r.note?`<div class="mono-small" style="margin-top:8px">📝 ${esc(r.note)}</div>`:''}
+    ${!done?`<div class="btn-row" style="margin-top:12px"><button class="btn primary" data-act="collect" data-id="${r.id}">Registrar cobro</button><button class="btn ghost" style="flex:0 0 auto;padding:16px 18px" data-act="editreceivable" data-id="${r.id}">${svg(IC.edit,2.1)}</button></div>`:`<button class="btn ghost" style="margin-top:10px" data-act="editreceivable" data-id="${r.id}">Ver / editar</button>`}</div>`;}).join('')
+  :`<div class="empty" style="padding:24px"><div class="ee">🤝</div><p>Nadie te debe registrado aún.</p></div>`}
+  <button class="btn ghost" data-act="addreceivable">+ Agregar quién te debe</button>`);
+}
 </script>
 <script>
 /* =================== HOJAS DE DECISIÓN =================== */
@@ -1525,24 +1572,24 @@ function sheetTreatResult(){
 }
 
 /* ---- ¿QUÉ PASA SI...? ---- */
-let WI_EXTRA=0, WI_H=36;
+let WI_EXTRA=0, WI_H=12;
 function sheetWhatIf(){
-  WI_EXTRA=0; WI_H=36;
+  WI_EXTRA=0; WI_H=12;
   const maxExtra=Math.max(500000,Math.round((S.profile.income||2000000)*0.6/50000)*50000);
   openSheet(`<h2>¿Qué pasa si...?</h2><div class="hd-sub">Mueve la palanca y mira tu futuro cambiar</div>
   <div class="field"><label>Ahorrar cada mes <b id="wiLab" class="num" style="color:var(--emerald)">+$0</b> adicionales</label>
     <input class="slider" id="wiSlider" type="range" min="0" max="${maxExtra}" step="50000" value="0" oninput="onWiSlider(this.value)"></div>
-  <div class="fc-tabs" id="wiTabs">${[[12,'1 año'],[36,'3 años'],[60,'5 años'],[120,'10 años']].map(([mo,l])=>`<button class="${mo===WI_H?'on':''}" data-act="wih" data-m="${mo}">${l}</button>`).join('')}</div>
+  <div class="fc-tabs" id="wiTabs">${[[3,'3m'],[6,'6m'],[9,'9m'],[12,'1a'],[24,'2a']].map(([mo,l])=>`<button class="${mo===WI_H?'on':''}" data-act="wih" data-m="${mo}">${l}</button>`).join('')}</div>
   <div id="wiRes"></div>`);
   updateWhatIf();
 }
 function onWiSlider(v){WI_EXTRA=+v;const l=$('#wiLab');if(l)l.textContent='+'+fmtShort(WI_EXTRA);updateWhatIf();}
 function updateWhatIf(){
   const base=forecast(S,WI_H,0),ext=forecast(S,WI_H,WI_EXTRA);
-  const bV=base.act[WI_H],eV=ext.act[WI_H],diff=eV-bV,yrs=WI_H/12;
+  const bV=base.act[WI_H],eV=ext.act[WI_H],diff=eV-bV,hz=WI_H<12?WI_H+' meses':(WI_H===12?'1 año':(WI_H/12)+' años');
   const r=$('#wiRes');if(!r)return;
   r.innerHTML=`<div class="scen"><div class="box"><div class="l">Ritmo actual</div><div class="n num">${fmtShort(bV)}</div></div><div class="arw">→</div><div class="box new"><div class="l">Con el cambio</div><div class="n num up">${fmtShort(eV)}</div></div></div>
-  <div class="verdict ${diff>0?'ok':'warn'}">${diff>0?'🚀':'👆'}<div><b style="display:block">${diff>0?'+'+fmt(diff)+' en '+(yrs%1?yrs.toFixed(1):yrs)+' años':'Sube el ahorro mensual'}</b>${WI_EXTRA>0?'Son '+fmtShort(WI_EXTRA/30.44)+' al día que se convierten en patrimonio.':'Arrastra la palanca para ver el impacto real.'}</div></div>
+  <div class="verdict ${diff>0?'ok':'warn'}">${diff>0?'🚀':'👆'}<div><b style="display:block">${diff>0?'+'+fmt(diff)+' en '+hz:'Sube el ahorro mensual'}</b>${WI_EXTRA>0?'Son '+fmtShort(WI_EXTRA/30.44)+' al día que se convierten en patrimonio.':'Arrastra la palanca para ver el impacto real.'}</div></div>
   <div class="vstats" style="margin-top:8px"><div><div class="n num">${fmtShort(ext.base)}</div><div class="l">ahorro mensual</div></div><div><div class="n num">${S.profile.retRate||11}%</div><div class="l">rendim. anual</div></div><div><div class="n num">${WI_H}m</div><div class="l">horizonte</div></div></div>`;
 }
 
@@ -1668,6 +1715,7 @@ function sheetAdd(){
     ['quickadd','investment','📈','Inversión','Hacer crecer tu plata','rgba(124,108,255,.16)'],
     ['quickadd','debt','💳','Pago de deuda','Abonar a una deuda','rgba(255,154,82,.15)'],
     ['transfer','','🔄','Transferencia','Mover entre cuentas','rgba(77,166,255,.15)'],
+    ['addreceivable','','🤝','Me deben','Préstamo a alguien','rgba(77,166,255,.14)'],
     ['addgoal','','🎯','Nueva meta','Para algo puntual','rgba(124,108,255,.14)'],
     ['addchain','','🔗','Nueva cadena','Ahorro que crece solo','rgba(53,214,232,.14)'],
     ['addrecur','','🔁','Recurrente','Ingreso o gasto fijo','rgba(255,194,75,.14)'],
@@ -1683,7 +1731,7 @@ function sheetGuide(){
     ['💸','Gastos','En qué se va tu plata por categoría, comparado con meses anteriores. Ponle topes en Presupuestos y te avisamos al acercarte.'],
     ['🎯','Ahorro','Metas para algo puntual (un viaje) y Cadenas: un ahorro que crece solo cada mes y ves cómo se va llenando.'],
     ['📊','Análisis','Tu Wealth Score (salud financiera), el coach con tus datos, el flujo de tu dinero y proyecciones. Prueba "¿Qué pasa si?".'],
-    ['👤','Perfil','Tus cuentas, deudas (con plan de salida), ingresos/gastos fijos automáticos, tu foto y el color de la app.'],
+    ['👤','Perfil','Tus cuentas, deudas (con plan de salida), quién te debe (cuentas por cobrar), ingresos/gastos fijos automáticos, tu foto y el color de la app.'],
     ['➕','El botón +','Desde cualquier pantalla: gasto, ingreso, ahorro, inversión, pago de deuda, transferencia entre cuentas, meta o cadena.'],
     ['✏️','Editar movimientos','Toca cualquier movimiento para cambiar su monto, categoría, nota o fecha — o borrarlo.'],
     ['📅','Resumen del mes','En Inicio o Análisis: tu cierre con calificación, ingresos vs gastos y tus mayores gastos.'],
@@ -1704,7 +1752,7 @@ function sheetNotifs(){
   ${perm==='denied'?`<div class="verdict bad" style="margin-bottom:14px">🔕<div><b style="display:block">Bloqueadas</b>Actívalas para este sitio desde los ajustes de tu navegador.</div></div>`:''}
   ${perm==='unsupported'?`<div class="verdict warn" style="margin-bottom:14px">📱<div><b style="display:block">Instala la app</b>Para recibir avisos en el celular, agrégala a tu pantalla de inicio.</div></div>`:''}
   ${on&&perm==='granted'?`<div class="verdict ok" style="margin-bottom:14px">🔔<div><b style="display:block">Avisos activados</b>Te notificaré al abrir la app. Ajusta qué en Perfil → Notificaciones.</div></div>`:''}
-  ${items.length?items.map(i=>`<div class="alert ${i.pr>=2?'red':'blu'}"${i.act?` data-act="${i.act}"${i.off!==undefined?` data-off="${i.off}"`:''} style="cursor:pointer"`:''}><div class="ab">${i.icon}</div><div style="flex:1"><b>${i.title}</b><small>${esc(i.body)}</small></div></div>`).join(''):`<div class="empty" style="padding:30px"><div class="ee">✨</div><p>Todo al día. Sin pendientes.</p></div>`}`);
+  ${items.length?items.map(i=>`<div class="alert ${i.pr>=2?'red':'blu'}"${i.act?` data-act="${i.act}"${i.off!==undefined?` data-off="${i.off}"`:''}${i.rid?` data-rid="${i.rid}"`:''} style="cursor:pointer"`:''}><div class="ab">${i.icon}</div><div style="flex:1"><b>${i.title}</b><small>${esc(i.body)}</small></div></div>`).join(''):`<div class="empty" style="padding:30px"><div class="ee">✨</div><p>Todo al día. Sin pendientes.</p></div>`}`);
 }
 
 /* ---- RESUMEN DEL MES (cierre) ---- */
@@ -1726,8 +1774,10 @@ function sheetMonthSummary(off){
     <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--line)"><span style="font-size:13.5px;color:var(--dim);font-weight:600">Balance del mes</span><span class="num ${m.net>=0?'up':'down'}" style="font-size:14.5px;font-weight:800">${m.net>=0?'+':'−'}${fmt(Math.abs(m.net))}</span></div>
     <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--line)"><span style="font-size:13.5px;color:var(--dim);font-weight:600">Tasa de ahorro</span><span class="num" style="font-size:14.5px;font-weight:800">${m.rate}%</span></div>
     ${m.budTot>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--line)"><span style="font-size:13.5px;color:var(--dim);font-weight:600">Presupuestos cumplidos</span><span class="num" style="font-size:14.5px;font-weight:800;color:${m.budOk===m.budTot?'var(--pos)':'var(--gold)'}">${m.budOk}/${m.budTot}</span></div>`:''}
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 0"><span style="font-size:13.5px;color:var(--dim);font-weight:600">Cambio de patrimonio</span><span class="num ${m.nwCh>=0?'up':'down'}" style="font-size:14.5px;font-weight:800">${m.nwCh>=0?'+':'−'}${fmtShort(Math.abs(m.nwCh))}</span></div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:11px 0"><span style="font-size:13.5px;color:var(--dim);font-weight:600">Crecimiento patrimonial</span><span class="num ${m.nwCh>=0?'up':'down'}" style="font-size:14.5px;font-weight:800">${m.nwCh>=0?'+':'−'}${fmtShort(Math.abs(m.nwCh))}${m.growthPct?` (${m.growthPct>=0?'+':''}${m.growthPct}%)`:''}</span></div></div>
+  ${m.incTop&&m.incTop.length?`<div class="divlab">De dónde vino</div><div class="card flat" style="padding:6px 14px">${m.incTop.map(t=>{const pct=m.inc>0?Math.round(t.v/m.inc*100):0;return `<div class="catrow" style="padding:9px 0"><div class="em">${t.cat.e}</div><div class="body"><div class="top"><span>${t.cat.n}</span><span class="num">${fmt(t.v)} <span class="pct">${pct}%</span></span></div><div class="track"><i style="width:${pct}%;background:var(--pos)"></i></div></div></div>`;}).join('')}</div>`:''}
   ${m.top.length?`<div class="divlab">En qué se fue</div><div class="card flat" style="padding:6px 14px">${m.top.map(t=>{const pct=m.exp>0?Math.round(t.v/m.exp*100):0;return `<div class="catrow" style="padding:9px 0"><div class="em">${t.cat.e}</div><div class="body"><div class="top"><span>${t.cat.n}</span><span class="num">${fmt(t.v)} <span class="pct">${pct}%</span></span></div><div class="track"><i style="width:${pct}%;background:var(--neg)"></i></div></div></div>`;}).join('')}</div>`:''}
+  ${(()=>{const rs=(S.receivables||[]).filter(r=>((r.amount||0)-(r.collected||0))>0);if(!rs.length)return '';const tot=receivablesTotal(S);return `<div class="divlab">Te deben (${fmt(tot)})</div><div class="card flat" style="padding:2px 14px">${rs.map((r,i)=>{const rem=(r.amount||0)-(r.collected||0);const due=r.dueDate?new Date(r.dueDate+'T00:00'):null;const dn=due?relDaysNum(due):null;const late=dn!==null&&dn<0;return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0${i<rs.length-1?';border-bottom:1px solid var(--line)':''}"><div><b style="font-size:13.5px;font-weight:700">${esc(r.name)}</b><div style="font-size:11.5px;color:${late?'var(--neg)':'var(--faint)'};font-weight:600">${due?(late?'venció '+fmtDayShort(due):'cobrar '+fmtDayShort(due)):'sin fecha'}</div></div><b class="num" style="color:var(--blue);font-size:14px">${fmt(rem)}</b></div>`;}).join('')}</div>`;})()}
   <div class="verdict ${verdict[3]==='g'?'ok':verdict[3]==='r'?'bad':'warn'}" style="margin-top:14px">${verdict[0]}<div><b style="display:block">${verdict[1]}</b>${verdict[2]}</div></div>
   <button class="btn primary" style="margin-top:14px" data-act="closesheet">Cerrar</button>`);
 }
@@ -1860,13 +1910,24 @@ function saveTransfer(){
   S.tx.push({id:uid(),type:'transfer',amount:amt,date:todayISO(),note:(val('trNote').trim()||('De '+from.name+' a '+to.name)),category:'other',accountId:to.id,fromId:from.id});
   closeSheet(); commit();
 }
+function saveReceivable(id){
+  const name=val('rvName').trim(),amount=parseNum(val('rvAmount'));if(!name||amount<=0)return;
+  const data={name,amount,dueDate:val('rvDate')||'',note:val('rvNote').trim()};
+  if(id){const r=S.receivables.find(x=>x.id===id);if(r){const kc=r.collected;Object.assign(r,data);r.collected=kc||0;}}
+  else S.receivables.push(Object.assign({id:uid(),collected:0},data));
+  closeSheet(); commit();
+}
+function delReceivable(id){S.receivables=S.receivables.filter(x=>x.id!==id);closeSheet();commit();}
+function saveCollect(id){
+  const rc=S.receivables.find(x=>x.id===id);if(!rc)return;const rem=Math.max(0,(rc.amount||0)-(rc.collected||0));
+  const amt=Math.min(rem,parseNum(val('rcAmt'))||rem);if(amt<=0)return;
+  const to=accOr(val('rcTo'),'bank');to.balance+=amt;rc.collected=(rc.collected||0)+amt;
+  S.tx.push({id:uid(),type:'collect',amount:amt,date:todayISO(),note:'Cobro a '+rc.name,category:'other',accountId:to.id,receivableId:rc.id});
+  closeSheet(); commit();
+}
 function deleteTx(id){
   const i=S.tx.findIndex(x=>x.id===id);if(i<0)return;const t=S.tx[i];
-  const A=id2=>acc(id2);
-  if(t.type==='expense'){const a=A(t.accountId);if(a)a.balance+=t.amount;}
-  else if(t.type==='income'){const a=A(t.accountId);if(a)a.balance-=t.amount;}
-  else if(t.type==='saving'||t.type==='investment'){const d=A(t.accountId);if(d)d.balance-=t.amount;const f=A(t.fromId);if(f)f.balance+=t.amount;if(t.goalId){const g=S.goals.find(x=>x.id===t.goalId);if(g)g.saved=Math.max(0,g.saved-t.amount);}}
-  else if(t.type==='debt'){const a=A(t.accountId);if(a)a.balance+=t.amount;if(t.debtId){const d=S.debts.find(x=>x.id===t.debtId);if(d)d.balance+=t.amount;}}
+  applyTxEffect(t,-1);
   S.tx.splice(i,1); closeSheet(); commit();
 }
 function delGoal(id){S.goals=S.goals.filter(x=>x.id!==id);closeSheet();commit();}
@@ -2133,6 +2194,13 @@ document.addEventListener('click',e=>{
     case 'saveedittx': saveEditTx(id); break;
     case 'transfer': sheetTransfer(); break;
     case 'savetransfer': saveTransfer(); break;
+    case 'addreceivable': sheetReceivable(); break;
+    case 'receivableslist': sheetReceivablesList(); break;
+    case 'editreceivable': sheetReceivable(S.receivables.find(r=>r.id===id)||S.receivables.find(r=>r.id===t.dataset.rid)); break;
+    case 'savereceivable': saveReceivable(id); break;
+    case 'delreceivable': delReceivable(id); break;
+    case 'collect': sheetCollect(S.receivables.find(r=>r.id===id)); break;
+    case 'savecollect': saveCollect(id); break;
     case 'deltx': deleteTx(id); break;
     case 'editprofile': sheetEditProfile(); break;
     case 'saveprofile': saveProfile(); break;
