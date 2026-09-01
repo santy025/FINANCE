@@ -429,6 +429,9 @@ select.field-sel{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://w
 .guide-row .ge{font-size:24px;flex:none;width:34px;text-align:center}
 .guide-row .gt b{font-size:14px;font-weight:800;display:block;margin-bottom:2px}
 .guide-row .gt small{font-size:12.5px;color:var(--dim);font-weight:500;line-height:1.4}
+.nbadge{position:absolute;top:-3px;right:-3px;min-width:17px;height:17px;padding:0 4px;border-radius:99px;background:var(--neg);color:#fff;font-size:10px;font-weight:800;display:grid;place-items:center;border:2px solid var(--bg)}
+.tgl{width:46px;height:28px;border-radius:99px;position:relative;transition:.2s;flex:none}
+.tgl>i{width:22px;height:22px;border-radius:50%;background:#fff;position:absolute;top:3px;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
 </style>
 </head>
 <body>
@@ -534,8 +537,8 @@ function applyAccent(){
 /* ---------- STATE ---------- */
 let S = null;
 const DEFAULT = ()=>({
-  v:2, profile:{name:'',income:0,savingsRate:20,payFreq:'monthly',paydays:[30],theme:'dark',onboarded:false,retRate:11,photo:'',accent:'aurora',hints:{},monthlyBudget:0},
-  accounts:[], tx:[], goals:[], debts:[], recurring:[], nwHist:[], budgets:{}, chains:[]
+  v:2, profile:{name:'',income:0,savingsRate:20,payFreq:'monthly',paydays:[30],theme:'dark',onboarded:false,retRate:11,photo:'',accent:'aurora',hints:{},monthlyBudget:0,notif:{on:false,pagos:true,topes:true,deudas:true,flujos:true},notifSeen:[],notifLastVisit:null},
+  accounts:[], tx:[], goals:[], debts:[], recurring:[], nwHist:[], budgets:{}, chains:[], notifFired:{}
 });
 /* rellena campos faltantes y migra formatos viejos (nunca pierde datos) */
 function normalize(st){
@@ -547,6 +550,10 @@ function normalize(st){
   if(!st.budgets||typeof st.budgets!=='object')st.budgets={};
   if(!st.profile.hints||typeof st.profile.hints!=='object')st.profile.hints={};
   if(typeof st.profile.monthlyBudget!=='number')st.profile.monthlyBudget=0;
+  st.profile.notif=Object.assign({on:false,pagos:true,topes:true,deudas:true,flujos:true},st.profile.notif||{});
+  if(!Array.isArray(st.profile.notifSeen))st.profile.notifSeen=[];
+  if(st.profile.notifLastVisit===undefined)st.profile.notifLastVisit=null;
+  if(!st.notifFired||typeof st.notifFired!=='object')st.notifFired={};
   st.recurring.forEach(r=>{ if(r.type!=='income')r.type='expense'; if(!r.day)r.day=1;
     if(r.auto===undefined)r.auto=true; if(!r.category)r.category=r.type==='income'?'salary':'services';
     if(r.lastPostedISO===undefined)r.lastPostedISO=null; });
@@ -931,7 +938,26 @@ function chartRing(pct){
   const size=132,sw=13,r=size/2-sw/2-2,cx=size/2,cy=size/2,C=2*Math.PI*r,p=clamp(pct,0,1),len=p*C;
   const col=pct>=1?'var(--neg)':pct>=0.85?'var(--gold)':'var(--emerald)';
   return `<svg viewBox="0 0 ${size} ${size}"><circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke-width="${sw}" style="stroke:var(--surface-3)"/><circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke-width="${sw}" style="stroke:${col}" stroke-linecap="round" stroke-dasharray="${len.toFixed(2)} ${(C-len).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"/></svg>`;
-}</script>
+}
+/* ====== NOTIFICACIONES: qué avisar ====== */
+let PREV_VISIT=null;
+function relDaysNum(d){const now=new Date(),t=new Date(now.getFullYear(),now.getMonth(),now.getDate());return Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate())-t)/864e5);}
+function notifItems(s){
+  const out=[],P=s.profile.notif||{},now=new Date(),mk=mkey(now);
+  if(P.pagos!==false){upcomingPayments(s,7).forEach(u=>{const dn=relDaysNum(u.date);
+    out.push({key:'pay:'+u.name+':'+u.date.toISOString().slice(0,10),icon:u.emoji,title:(u.type==='income'?'Cobro ':'Pago ')+relDays(u.date),body:`${u.name}: ${u.type==='income'?'+':'−'}${fmt(u.amount)} · ${fmtDayShort(u.date)}`,pr:dn<=1?2:1});});}
+  if(P.topes!==false){const mb=s.profile.monthlyBudget,spentM=sum(Object.values(monthCats(s,0)));
+    if(mb>0&&spentM>mb)out.push({key:'budT:'+mk,icon:'🚨',title:'Tope del mes superado',body:`Llevas ${fmt(spentM)} de ${fmt(mb)}.`,pr:2});
+    else if(mb>0&&spentM>=mb*.85)out.push({key:'budT85:'+mk,icon:'⚠️',title:'Cerca del tope del mes',body:`Vas al ${Math.round(spentM/mb*100)}% de tu presupuesto.`,pr:1});
+    budgetStatus(s).forEach(x=>{if(x.spent>x.lim)out.push({key:'bud:'+x.id+':'+mk,icon:'🚨',title:'Presupuesto excedido',body:`${x.cat.n}: ${fmt(x.spent)} de ${fmt(x.lim)}.`,pr:2});else if(x.pct>=.85)out.push({key:'bud85:'+x.id+':'+mk,icon:'📊',title:'Presupuesto al límite',body:`${x.cat.n}: vas al ${Math.round(x.pct*100)}%.`,pr:1});});}
+  if(P.deudas!==false){s.debts.forEach(d=>{if(d.balance>0)out.push({key:'debt:'+d.id+':'+mk,icon:'💳',title:'Recuerda tu deuda',body:`${d.name}: debes ${fmt(d.balance)}. Abona este mes para avanzar.`,pr:1});});}
+  if(P.flujos!==false&&now.getDate()<=5){const pm=new Date(now.getFullYear(),now.getMonth()-1,1);out.push({key:'sum:'+mkey(pm),icon:'📅',title:'Tu resumen está listo',body:`Mira tu cierre de ${pm.toLocaleDateString('es-CO',{month:'long'})}.`,pr:1,act:'monthsummary',off:-1});}
+  if(P.flujos!==false&&PREV_VISIT){const auto=s.tx.filter(t=>(t.recur||t.chainId)&&t.date>PREV_VISIT);
+    if(auto.length)out.push({key:'auto:'+PREV_VISIT+':'+auto.length,icon:'🔄',title:'Movimientos automáticos',body:`Se registraron ${auto.length} pago(s)/aporte(s) automáticos desde tu última visita.`,pr:1});}
+  return out;
+}
+function notifUnread(s){const seen=s.profile.notifSeen||[];return notifItems(s).filter(i=>!seen.includes(i.key)).length;}
+function markNotifsSeen(){const keys=notifItems(S).map(i=>i.key);const seen=(S.profile.notifSeen||[]).concat(keys);S.profile.notifSeen=[...new Set(seen)].slice(-60);save();}</script>
 <script>
 /* =================== GRÁFICAS SVG =================== */
 function smooth(pts){
@@ -1112,7 +1138,7 @@ function viewHome(){
   const al=alerts(s), ins=insights(s).slice(0,2), upc=upcomingPayments(s,31).slice(0,4);
   return `<div class="stagger">
   <div class="hdr" style="--i:0"><div><div class="hi">${greeting()}, <b>${esc(s.profile.name||'')}</b></div><div class="date">${todayLong()}</div></div>
-    <div style="display:flex;gap:9px"><button class="iconbtn" data-act="theme">${svg(s.profile.theme==='dark'?IC.sun:IC.moon,2.1)}</button>${avatarBtn('avatar','','tab','profile')}</div></div>
+    <div style="display:flex;gap:9px">${(()=>{const nu=notifUnread(s);return `<button class="iconbtn" data-act="notifs" style="position:relative">${svg(IC.bell,2.1)}${nu>0?`<span class="nbadge">${nu>9?'9+':nu}</span>`:''}</button>`;})()}<button class="iconbtn" data-act="theme">${svg(s.profile.theme==='dark'?IC.sun:IC.moon,2.1)}</button>${avatarBtn('avatar','','tab','profile')}</div></div>
   ${tipCard('home','<b>Este es tu centro.</b> Ves tu patrimonio y cuánto puedes gastar hoy sin tocar tu ahorro. Usa el botón <b>+</b> (abajo) para registrar lo que sea.')}
 
   <div class="nw" style="--i:1"><div class="k">Patrimonio neto</div>
@@ -1313,6 +1339,17 @@ function viewProfile(){
 
   <div class="sect-h" style="--i:6"><h3>Logros</h3></div>
   <div class="badges" style="--i:6">${ACH.map(a=>`<div class="badge ${a.test(s)?'on':''}"><div class="be">${a.e}</div><div class="bl">${a.l}</div></div>`).join('')}</div>
+
+  <div class="sect-h" style="--i:7"><h3>Notificaciones</h3></div>
+  ${(()=>{const P=p.notif||{},perm=notifySupported()?Notification.permission:'unsupported';
+    const tgl=(k,e,l,su)=>{const on=P[k]!==false;return `<div class="acc" data-act="notiftoggle" data-k="${k}"><div class="ae">${e}</div><div class="an"><b>${l}</b><small>${su}</small></div><div class="as"><div class="tgl" style="background:${on?'var(--emerald)':'var(--surface-3)'}"><i style="left:${on?'21px':'3px'}"></i></div></div></div>`;};
+    return `<div class="card" style="--i:7">
+    ${(perm==='default'||(perm==='granted'&&!P.on))?`<button class="btn primary" style="margin-bottom:10px" data-act="enablenotifs">🔔 Activar avisos en el celular</button>`:''}
+    ${perm==='denied'?`<div class="mono-small" style="margin-bottom:10px">🔕 Bloqueadas en el navegador. Actívalas en los ajustes del sitio.</div>`:''}
+    ${perm==='unsupported'?`<div class="mono-small" style="margin-bottom:10px">📱 Instálala en tu pantalla de inicio para recibir avisos en el celular.</div>`:''}
+    ${P.on&&perm==='granted'?`<div class="mono-small" style="margin-bottom:6px;color:var(--pos)">🔔 Activadas · te aviso al abrir la app y mientras esté abierta</div>`:''}
+    ${tgl('pagos','📅','Pagos y cobros','Lo que se viene esta semana')}${tgl('topes','📊','Topes de gasto','Cuando te acercas o te pasas')}${tgl('deudas','💳','Deudas','Recordatorio de abonar')}${tgl('flujos','🔄','Actividad y resumen','Movimientos automáticos y cierre de mes')}
+    </div>`;})()}
 
   <div class="sect-h" style="--i:7"><h3>Apariencia</h3></div>
   <div class="card" style="--i:7"><div style="font-size:12.5px;font-weight:700;color:var(--dim);margin-bottom:11px">Color de la app</div>
@@ -1650,11 +1687,24 @@ function sheetGuide(){
     ['➕','El botón +','Desde cualquier pantalla: gasto, ingreso, ahorro, inversión, pago de deuda, transferencia entre cuentas, meta o cadena.'],
     ['✏️','Editar movimientos','Toca cualquier movimiento para cambiar su monto, categoría, nota o fecha — o borrarlo.'],
     ['📅','Resumen del mes','En Inicio o Análisis: tu cierre con calificación, ingresos vs gastos y tus mayores gastos.'],
+    ['🔔','Notificaciones','Toca la campana en Inicio para ver pagos, topes y deudas pendientes. Actívalas en el celular desde Perfil → Notificaciones.'],
     ['💾','Tus datos','Se guardan solos en tu dispositivo. En Perfil puedes exportar un respaldo o restaurarlo en otro lado.'],
   ];
   openSheet(`<h2>Guía rápida</h2><div class="hd-sub">Cómo sacarle el jugo a tu Wealth OS</div>
   <div class="card flat" style="padding:2px 15px;margin-bottom:14px">${rows.map(([e,t,d])=>`<div class="guide-row"><div class="ge">${e}</div><div class="gt"><b>${t}</b><small>${d}</small></div></div>`).join('')}</div>
   <button class="btn primary" data-act="closesheet">¡Entendido!</button>`);
+}
+
+/* ---- CENTRO DE NOTIFICACIONES ---- */
+function sheetNotifs(){
+  const items=notifItems(S),on=S.profile.notif&&S.profile.notif.on,perm=notifySupported()?Notification.permission:'unsupported';
+  markNotifsSeen();
+  openSheet(`<h2>Notificaciones</h2><div class="hd-sub">Lo importante de tu plata, al día</div>
+  ${(perm==='default'||(perm==='granted'&&!on))?`<button class="btn primary" style="margin-bottom:14px" data-act="enablenotifs">🔔 Activar avisos en el celular</button>`:''}
+  ${perm==='denied'?`<div class="verdict bad" style="margin-bottom:14px">🔕<div><b style="display:block">Bloqueadas</b>Actívalas para este sitio desde los ajustes de tu navegador.</div></div>`:''}
+  ${perm==='unsupported'?`<div class="verdict warn" style="margin-bottom:14px">📱<div><b style="display:block">Instala la app</b>Para recibir avisos en el celular, agrégala a tu pantalla de inicio.</div></div>`:''}
+  ${on&&perm==='granted'?`<div class="verdict ok" style="margin-bottom:14px">🔔<div><b style="display:block">Avisos activados</b>Te notificaré al abrir la app. Ajusta qué en Perfil → Notificaciones.</div></div>`:''}
+  ${items.length?items.map(i=>`<div class="alert ${i.pr>=2?'red':'blu'}"${i.act?` data-act="${i.act}"${i.off!==undefined?` data-off="${i.off}"`:''} style="cursor:pointer"`:''}><div class="ab">${i.icon}</div><div style="flex:1"><b>${i.title}</b><small>${esc(i.body)}</small></div></div>`).join(''):`<div class="empty" style="padding:30px"><div class="ee">✨</div><p>Todo al día. Sin pendientes.</p></div>`}`);
 }
 
 /* ---- RESUMEN DEL MES (cierre) ---- */
@@ -1824,6 +1874,33 @@ function delAcc(id){S.accounts=S.accounts.filter(x=>x.id!==id);closeSheet();comm
 function delDebt(id){S.debts=S.debts.filter(x=>x.id!==id);closeSheet();commit();}
 function toggleTheme(){S.profile.theme=S.profile.theme==='dark'?'light':'dark';document.querySelector('meta[name=theme-color]').setAttribute('content',S.profile.theme==='dark'?'#0B0C11':'#EEF1F7');save();render();}
 function resetAll(){if(!confirm('¿Seguro que quieres borrar todo y empezar de cero? Esta acción no se puede deshacer.'))return;S=DEFAULT();save();closeSheet();showOnboarding();}
+
+/* ===== NOTIFICACIONES (permiso, disparo, PWA) ===== */
+const APP_ICON="data:image/svg+xml,"+encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='#17E6A1'/><stop offset='0.5' stop-color='#35D6E8'/><stop offset='1' stop-color='#7C6CFF'/></linearGradient></defs><rect width='512' height='512' rx='115' fill='url(#g)'/><path d='M120 120v272h272' fill='none' stroke='#04130D' stroke-width='34' stroke-linecap='round' stroke-linejoin='round'/><path d='M170 300l70-70 55 55 95-110' fill='none' stroke='#04130D' stroke-width='34' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+function notifySupported(){return typeof window!=='undefined'&&'Notification'in window;}
+function osNotify(title,body){try{if(!notifySupported()||Notification.permission!=='granted')return;new Notification(title,{body:body,icon:APP_ICON,badge:APP_ICON,tag:title});}catch(e){}}
+async function enableNotifs(){
+  if(!notifySupported()){toast('Este navegador no soporta notificaciones');return;}
+  try{const p=await Notification.requestPermission();
+    if(p==='granted'){S.profile.notif=S.profile.notif||{};S.profile.notif.on=true;save();render();toast('Notificaciones activadas ✓');osNotify('My Wealth OS','¡Listo! Te avisaré de pagos, topes y deudas.');setTimeout(fireDueNotifications,600);}
+    else if(p==='denied'){toast('Están bloqueadas en el navegador');render();}
+  }catch(e){toast('No se pudo activar');}
+}
+function fireDueNotifications(){
+  if(!S||!S.profile.notif||!S.profile.notif.on)return;
+  if(!notifySupported()||Notification.permission!=='granted')return;
+  const today=todayISO();S.notifFired=S.notifFired||{};let fired=false;
+  notifItems(S).filter(i=>i.pr>=2).forEach(i=>{if(S.notifFired[i.key]!==today){osNotify(i.title,i.body);S.notifFired[i.key]=today;fired=true;}});
+  if(fired)save();
+}
+function setupPWA(){
+  try{
+    const m={name:'My Wealth OS',short_name:'Wealth OS',start_url:'.',scope:'.',display:'standalone',orientation:'portrait',background_color:'#0B0C11',theme_color:'#0B0C11',description:'Convierte tus ingresos en patrimonio.',icons:[{src:APP_ICON,sizes:'512x512',type:'image/svg+xml',purpose:'any'},{src:APP_ICON,sizes:'192x192',type:'image/svg+xml',purpose:'maskable'}]};
+    const u=URL.createObjectURL(new Blob([JSON.stringify(m)],{type:'application/json'}));
+    const l=document.createElement('link');l.rel='manifest';l.href=u;document.head.appendChild(l);
+    const al=document.createElement('link');al.rel='apple-touch-icon';al.href=APP_ICON;document.head.appendChild(al);
+  }catch(e){}
+}
 
 /* ===== RECURRENTES AUTOMÁTICOS ===== */
 function nextOccurrenceAfter(day,from){let d=new Date(from);d.setDate(d.getDate()+1);for(let i=0;i<400;i++){const dim=daysInMonth(d);if(d.getDate()===Math.min(day,dim))return new Date(d.getFullYear(),d.getMonth(),d.getDate());d.setDate(d.getDate()+1);}return new Date(from);}
@@ -2017,6 +2094,9 @@ document.addEventListener('click',e=>{
     case 'tab': go(t.dataset.tab); break;
     case 'addmenu': sheetAdd(); break;
     case 'guide': sheetGuide(); break;
+    case 'notifs': sheetNotifs(); break;
+    case 'enablenotifs': enableNotifs(); break;
+    case 'notiftoggle':{const k=t.dataset.k;S.profile.notif=S.profile.notif||{};S.profile.notif[k]=(S.profile.notif[k]===false);save();render();break;}
     case 'monthsummary': sheetMonthSummary(parseInt(t.dataset.off)||0); break;
     case 'txfilter': TXQ.type=t.dataset.t; t.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('on')); t.classList.add('on'); renderTxList(); break;
     case 'dismisstip': dismissTip(t.dataset.k); break;
@@ -2091,12 +2171,19 @@ document.addEventListener('click',e=>{
 /* =================== INIT =================== */
 async function init(){
   try{ S=await loadState(); }catch(e){ S=null; }
+  setupPWA();
   const sp=$('#splash');
   const meta=document.querySelector('meta[name=theme-color]');
   if(S&&S.profile.onboarded){
     document.documentElement.setAttribute('data-theme',S.profile.theme);
     if(meta)meta.setAttribute('content',S.profile.theme==='dark'?'#0B0C11':'#EEF1F7');
-    runRecurring(); runChains(); syncNW(); $('#app').style.display='flex'; render();
+    runRecurring(); runChains(); syncNW();
+    PREV_VISIT=S.profile.notifLastVisit; S.profile.notifLastVisit=todayISO(); save();
+    $('#app').style.display='flex'; render();
+    setTimeout(fireDueNotifications,800);
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden)fireDueNotifications();});
+    window.addEventListener('focus',fireDueNotifications);
+    setInterval(()=>{if(!document.hidden)fireDueNotifications();},300000);
   } else {
     S=DEFAULT(); showOnboarding();
   }
