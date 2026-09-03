@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0B0C11">
 <title>My Wealth OS</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20512%20512'%3E%3Cdefs%3E%3ClinearGradient%20id='g'%20x1='0'%20y1='0'%20x2='1'%20y2='1'%3E%3Cstop%20offset='0'%20stop-color='%2317E6A1'/%3E%3Cstop%20offset='.5'%20stop-color='%2335D6E8'/%3E%3Cstop%20offset='1'%20stop-color='%237C6CFF'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect%20width='512'%20height='512'%20rx='115'%20fill='url(%23g)'/%3E%3Cpath%20d='M120%20120v272h272'%20fill='none'%20stroke='%2304130D'%20stroke-width='34'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3Cpath%20d='M170%20300l70-70%2055%2055%2095-110'%20fill='none'%20stroke='%2304130D'%20stroke-width='34'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="mask-icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20512%20512'%3E%3Cpath%20d='M120%20120v272h272'%20fill='none'%20stroke='%23000'%20stroke-width='40'/%3E%3Cpath%20d='M170%20300l70-70%2055%2055%2095-110'%20fill='none'%20stroke='%23000'%20stroke-width='40'/%3E%3C/svg%3E" color="#17E6A1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -537,7 +539,7 @@ function applyAccent(){
 /* ---------- STATE ---------- */
 let S = null;
 const DEFAULT = ()=>({
-  v:2, profile:{name:'',income:0,savingsRate:20,payFreq:'monthly',paydays:[30],theme:'dark',onboarded:false,retRate:11,photo:'',accent:'aurora',hints:{},monthlyBudget:0,notif:{on:false,pagos:true,topes:true,deudas:true,cobros:true,flujos:true},notifSeen:[],notifLastVisit:null},
+  v:2, profile:{name:'',income:0,salaryBase:0,commission:0,hasCommission:false,commissionDay:30,deduct:false,prestaciones:false,jobStart:'',savingsRate:20,payFreq:'monthly',paydays:[30],theme:'dark',onboarded:false,retRate:11,photo:'',accent:'aurora',hints:{},monthlyBudget:0,notif:{on:false,pagos:true,topes:true,deudas:true,cobros:true,prestaciones:true,flujos:true},notifSeen:[],notifLastVisit:null},
   accounts:[], tx:[], goals:[], debts:[], recurring:[], nwHist:[], budgets:{}, chains:[], receivables:[], notifFired:{}, notifFired:{}
 });
 /* rellena campos faltantes y migra formatos viejos (nunca pierde datos) */
@@ -551,7 +553,14 @@ function normalize(st){
   if(!st.budgets||typeof st.budgets!=='object')st.budgets={};
   if(!st.profile.hints||typeof st.profile.hints!=='object')st.profile.hints={};
   if(typeof st.profile.monthlyBudget!=='number')st.profile.monthlyBudget=0;
-  st.profile.notif=Object.assign({on:false,pagos:true,topes:true,deudas:true,cobros:true,flujos:true},st.profile.notif||{});
+  if(typeof st.profile.salaryBase!=='number')st.profile.salaryBase=st.profile.income||0;
+  if(typeof st.profile.commission!=='number')st.profile.commission=0;
+  if(typeof st.profile.hasCommission!=='boolean')st.profile.hasCommission=st.profile.commission>0;
+  if(typeof st.profile.commissionDay!=='number')st.profile.commissionDay=30;
+  if(typeof st.profile.deduct!=='boolean')st.profile.deduct=false;
+  if(typeof st.profile.prestaciones!=='boolean')st.profile.prestaciones=false;
+  if(typeof st.profile.jobStart!=='string')st.profile.jobStart='';
+  st.profile.notif=Object.assign({on:false,pagos:true,topes:true,deudas:true,cobros:true,prestaciones:true,flujos:true},st.profile.notif||{});
   if(!Array.isArray(st.profile.notifSeen))st.profile.notifSeen=[];
   if(st.profile.notifLastVisit===undefined)st.profile.notifLastVisit=null;
   if(!st.notifFired||typeof st.notifFired!=='object')st.notifFired={};
@@ -642,6 +651,33 @@ function fmtMY(d){return new Date(d).toLocaleDateString('es-CO',{month:'short',y
 function assetsOf(s){return sum(s.accounts.filter(a=>a.type!=='credit').map(a=>a.balance));}
 function liabOf(s){return sum(s.accounts.filter(a=>a.type==='credit').map(a=>Math.abs(a.balance)))+sum(s.debts.map(d=>d.balance));}
 function receivablesTotal(s){return sum((s.receivables||[]).map(r=>Math.max(0,(r.amount||0)-(r.collected||0))));}
+/* deducciones de ley Colombia (empleado): salud 4% + pensión 4% (+ FSP 1% desde 4 SMMLV) */
+const SMMLV_REF=1423500;
+function payDeductions(base,comm,apply){
+  base=base||0;comm=comm||0;const ibc=base+comm;
+  if(!apply)return {salud:0,pension:0,fsp:0,total:0,ibc};
+  const salud=ibc*0.04,pension=ibc*0.04,fsp=ibc>=4*SMMLV_REF?ibc*0.01:0;
+  return {salud,pension,fsp,total:salud+pension+fsp,ibc};
+}
+function netIncome(p){const d=payDeductions(p.salaryBase||0,p.hasCommission?(p.commission||0):0,p.deduct);return Math.max(0,(p.salaryBase||0)+(p.hasCommission?(p.commission||0):0)-d.total);}
+/* prestaciones sociales Colombia (empleado): prima, cesantías, intereses, vacaciones */
+function prestaciones(s){
+  const p=s.profile,base=(p.salaryBase||0)+(p.hasCommission?(p.commission||0):0);
+  if(!p.prestaciones||base<=0)return null;
+  const now=new Date(),y=now.getFullYear(),t=new Date(now.getFullYear(),now.getMonth(),now.getDate()),DM=864e5;
+  const start=p.jobStart?new Date(p.jobStart+'T00:00'):new Date(y,0,1);
+  const between=(a,b)=>Math.max(0,Math.round((b-a)/DM));
+  const nextOf=(mo,d)=>{let dt=new Date(y,mo,d);if(dt<t)dt=new Date(y+1,mo,d);return dt;};
+  const jun30=new Date(y,5,30),dec20=new Date(y,11,20);
+  let primaDate,primaAmount;
+  if(t<=jun30){primaDate=jun30;const ss=new Date(y,0,1),ef=start>ss?start:ss;primaAmount=base*Math.min(180,between(ef,jun30))/360;}
+  else if(t<=dec20){primaDate=dec20;const ss=new Date(y,6,1),ef=start>ss?start:ss;primaAmount=base*Math.min(180,between(ef,new Date(y,11,31)))/360;}
+  else{primaDate=new Date(y+1,5,30);primaAmount=base*0.5;}
+  const ys=new Date(y,0,1),efY=start>ys?start:ys,daysY=Math.min(360,between(efY,now));
+  const cesAccrued=base*daysY/360,intAccrued=cesAccrued*0.12;
+  const vacDays=Math.round(15*daysY/360),vacValue=base*daysY/720;
+  return {base,prima:{amount:primaAmount,date:primaDate},cesantias:{accrued:cesAccrued,annual:base,date:nextOf(1,14)},intereses:{amount:intAccrued,date:nextOf(0,31)},vacaciones:{days:vacDays,value:vacValue}};
+}
 function netWorth(s){return assetsOf(s)+receivablesTotal(s)-liabOf(s);}
 function availableOf(s){return sum(s.accounts.filter(a=>LIQUID.includes(a.type)).map(a=>a.balance));}
 function savingsBal(s){return sum(s.accounts.filter(a=>a.type==='savings'||a.type==='investment').map(a=>a.balance));}
@@ -934,7 +970,10 @@ function applyTxEffect(t,sign){
 function relDays(d){const now=new Date(),t=new Date(now.getFullYear(),now.getMonth(),now.getDate());const dd=Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate())-t)/864e5);return dd<=0?'hoy':dd===1?'mañana':'en '+dd+' días';}
 function upcomingPayments(s,days){
   const now=new Date(),today=new Date(now.getFullYear(),now.getMonth(),now.getDate()),lim=new Date(today);lim.setDate(lim.getDate()+(days||31));
-  const out=[];
+  const out=[],p=s.profile;
+  if(p.hasCommission&&p.commission>0){const d=nextOccurrenceAfter(p.commissionDay||30,today);if(d<=lim)out.push({date:d,name:'Comisión',amount:p.commission,type:'income',emoji:'💸'});}
+  const pr=prestaciones(s);
+  if(pr){if(pr.prima.date<=lim&&pr.prima.amount>0)out.push({date:pr.prima.date,name:'Prima de servicios',amount:pr.prima.amount,type:'income',emoji:'🎁'});if(pr.intereses.date<=lim&&pr.intereses.amount>0)out.push({date:pr.intereses.date,name:'Intereses de cesantías',amount:pr.intereses.amount,type:'income',emoji:'🏦'});}
   (s.recurring||[]).forEach(r=>{if(!r.auto||!r.amount)return;const d=nextOccurrenceAfter(r.day||1,today);if(d<=lim)out.push({date:d,name:r.name,amount:r.amount,type:r.type,emoji:r.type==='income'?'💵':catOf(r.type,r.category).e});});
   (s.chains||[]).forEach(c=>{if(!c.auto||!c.monthly)return;if(c.months>0&&(c.count||0)>=c.months)return;const d=nextOccurrenceAfter(c.day||1,today);if(d<=lim)out.push({date:d,name:c.name,amount:c.monthly,type:'saving',emoji:'🔗'});});
   out.sort((a,b)=>a.date-b.date);
@@ -958,6 +997,7 @@ function notifItems(s){
     budgetStatus(s).forEach(x=>{if(x.spent>x.lim)out.push({key:'bud:'+x.id+':'+mk,icon:'🚨',title:'Presupuesto excedido',body:`${x.cat.n}: ${fmt(x.spent)} de ${fmt(x.lim)}.`,pr:2});else if(x.pct>=.85)out.push({key:'bud85:'+x.id+':'+mk,icon:'📊',title:'Presupuesto al límite',body:`${x.cat.n}: vas al ${Math.round(x.pct*100)}%.`,pr:1});});}
   if(P.deudas!==false){s.debts.forEach(d=>{if(d.balance>0)out.push({key:'debt:'+d.id+':'+mk,icon:'💳',title:'Recuerda tu deuda',body:`${d.name}: debes ${fmt(d.balance)}. Abona este mes para avanzar.`,pr:1});});}
   if(P.cobros!==false){(s.receivables||[]).forEach(rc=>{const rem=(rc.amount||0)-(rc.collected||0);if(rem>0&&rc.dueDate){const d=new Date(rc.dueDate+'T00:00'),dn=relDaysNum(d);if(dn<=7)out.push({key:'rcv:'+rc.id+':'+rc.dueDate,icon:'🤝',title:dn<0?'Cobro vencido':dn===0?'Cobro hoy':'Por cobrar '+relDays(d),body:`${rc.name} te debe ${fmt(rem)} · vence ${fmtDayShort(d)}`,pr:dn<=0?2:1,act:'editreceivable',rid:rc.id});}});}
+  if(P.prestaciones!==false){const pr=prestaciones(s);if(pr){[[pr.prima,'Prima de servicios','🎁',pr.prima.amount],[pr.intereses,'Intereses de cesantías','🏦',pr.intereses.amount],[pr.cesantias,'Consignan tus cesantías','🏦',pr.cesantias.accrued]].forEach(([it,label,emoji,amt])=>{if(it&&it.date){const dn=relDaysNum(it.date);if(dn>=0&&dn<=30)out.push({key:'presto:'+label+':'+it.date.toISOString().slice(0,10),icon:emoji,title:label+' '+relDays(it.date),body:`≈ ${fmt(amt)} · ${fmtDayShort(it.date)}`,pr:dn<=3?2:1});}});}}
   if(P.flujos!==false&&now.getDate()<=5){const pm=new Date(now.getFullYear(),now.getMonth()-1,1);out.push({key:'sum:'+mkey(pm),icon:'📅',title:'Tu resumen está listo',body:`Mira tu cierre de ${pm.toLocaleDateString('es-CO',{month:'long'})}.`,pr:1,act:'monthsummary',off:-1});}
   if(P.flujos!==false&&PREV_VISIT){const auto=s.tx.filter(t=>(t.recur||t.chainId)&&t.date>PREV_VISIT);
     if(auto.length)out.push({key:'auto:'+PREV_VISIT+':'+auto.length,icon:'🔄',title:'Movimientos automáticos',body:`Se registraron ${auto.length} pago(s)/aporte(s) automáticos desde tu última visita.`,pr:1});}
@@ -1331,6 +1371,27 @@ function viewProfile(){
 
   <div class="streak" style="--i:2;margin-top:14px"><div class="fire">🔥</div><div style="flex:1"><div class="sn num">${streak(s)} días</div><small>${streak(s)>0?'sin romper tu presupuesto':'empieza tu racha hoy'}</small></div></div>
 
+  <div class="sect-h" style="--i:2"><h3>Tu ingreso</h3><span class="lnk" data-act="editprofile">Editar</span></div>
+  ${(()=>{const d=payDeductions(p.salaryBase||0,p.hasCommission?(p.commission||0):0,p.deduct);const net=p.income||0;
+    if((p.salaryBase||0)<=0&&net<=0)return `<div class="card" style="--i:2"><div class="empty" style="padding:18px"><p>Configura tu salario base, comisión<br>y deducciones para ver tu neto exacto.</p><button class="btn ghost" style="max-width:220px;margin:14px auto 0" data-act="editprofile">Configurar ingreso</button></div></div>`;
+    return `<div class="card flat" style="--i:2;padding:2px 15px">
+      ${(p.salaryBase||0)>0?kv('Salario base',p.salaryBase,'up','+'):''}
+      ${p.hasCommission&&p.commission>0?kv('Comisión (día '+p.commissionDay+')',p.commission,'up','+'):''}
+      ${p.deduct&&d.salud>0?kv('Salud (4%)',d.salud,'','−'):''}
+      ${p.deduct&&d.pension>0?kv('Pensión (4%)',d.pension,'','−'):''}
+      ${p.deduct&&d.fsp>0?kv('Fondo solidaridad (1%)',d.fsp,'','−'):''}
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0"><b style="font-size:14px">Neto que recibes</b><b class="num" style="font-size:16px">${fmt(net)}/mes</b></div>
+    </div>${p.hasCommission&&p.commission>0?`<div class="mono-small" style="--i:2;margin:8px 2px 0">💸 Tu comisión (${fmt(p.commission)}) llega el día ${p.commissionDay} y te avisamos cuando se acerque.</div>`:''}`;})()}
+
+  ${(()=>{const pr=prestaciones(s);if(!pr)return '';const row=(e,label,amount,sub)=>`<div class="acc" style="border:none;padding:11px 0"><div class="ae">${e}</div><div class="an"><b>${label}</b><small>${sub}</small></div><div class="as"><b class="num" style="color:var(--pos)">${fmtShort(amount)}</b></div></div>`;
+    return `<div class="sect-h" style="--i:2"><h3>Prestaciones sociales</h3></div>
+    <div class="card" style="--i:2;padding:2px 15px">
+      ${row('🎁','Prima de servicios',pr.prima.amount,'próxima: '+fmtDayShort(pr.prima.date))}
+      ${row('🏦','Cesantías (acumuladas)',pr.cesantias.accrued,'consignan '+fmtDayShort(pr.cesantias.date))}
+      ${row('💰','Intereses a cesantías',pr.intereses.amount,'te pagan '+fmtDayShort(pr.intereses.date))}
+      ${row('🏖️','Vacaciones',pr.vacaciones.value,pr.vacaciones.days+' días acumulados')}
+    </div><div class="mono-small" style="--i:2;margin:8px 2px 0">Estimado sobre ${fmt(pr.base)}/mes${p.jobStart?'':' · agrega tu fecha de ingreso para más exactitud'}.</div>`;})()}
+
   <div class="sect-h" style="--i:3"><h3>Mi dinero</h3><span class="lnk" data-act="addaccount">+ Cuenta</span></div>
   <div class="card" style="--i:3">${accs.length?accs.map(a=>`<div class="acc" data-act="editacc" data-id="${a.id}"><div class="ae">${ACC_TYPES[a.type].e}</div><div class="an"><b>${esc(a.name)}</b><small>${ACC_TYPES[a.type].n}${a.type==='credit'||assets<=0?'':' · '+Math.round(a.balance/assets*100)+'% patrimonio'}</small></div><div class="as"><b class="num" style="${a.balance<0?'color:var(--neg)':''}">${fmt(a.balance)}</b></div></div>`).join(''):`<div class="empty" style="padding:18px"><p>Agrega dónde tienes tu dinero.</p></div>`}</div>
 
@@ -1360,7 +1421,10 @@ function viewProfile(){
     ${perm==='denied'?`<div class="mono-small" style="margin-bottom:10px">🔕 Bloqueadas en el navegador. Actívalas en los ajustes del sitio.</div>`:''}
     ${perm==='unsupported'?`<div class="mono-small" style="margin-bottom:10px">📱 Instálala en tu pantalla de inicio para recibir avisos en el celular.</div>`:''}
     ${P.on&&perm==='granted'?`<div class="mono-small" style="margin-bottom:6px;color:var(--pos)">🔔 Activadas · te aviso al abrir la app y mientras esté abierta</div>`:''}
-    ${tgl('pagos','📅','Pagos y cobros','Lo que se viene esta semana')}${tgl('topes','📊','Topes de gasto','Cuando te acercas o te pasas')}${tgl('deudas','💳','Deudas','Recordatorio de abonar')}${tgl('cobros','🤝','Me deben','Cuando se acerca una fecha de cobro')}${tgl('flujos','🔄','Actividad y resumen','Movimientos automáticos y cierre de mes')}
+    ${tgl('pagos','📅','Pagos y cobros','Lo que se viene esta semana')}${tgl('topes','📊','Topes de gasto','Cuando te acercas o te pasas')}${tgl('deudas','💳','Deudas','Recordatorio de abonar')}${tgl('cobros','🤝','Me deben','Cuando se acerca una fecha de cobro')}${tgl('prestaciones','🎁','Prestaciones','Prima, cesantías e intereses')}${tgl('flujos','🔄','Actividad y resumen','Movimientos automáticos y cierre de mes')}
+    <div class="hr"></div>
+    <button class="btn ghost" data-act="exporticalendar" style="margin-top:2px">📅 Exportar recordatorios al calendario</button>
+    <p class="mono-small" style="margin:10px 2px 0">Descarga tus fechas (pagos, prima, cesantías, cobros) y súbelas a Google Calendar una vez. Así te llegan avisos al <b>celular y al correo</b>, gratis y aunque la app esté cerrada.</p>
     </div>`;})()}
 
   <div class="sect-h" style="--i:7"><h3>Apariencia</h3></div>
@@ -1735,7 +1799,7 @@ function sheetGuide(){
     ['➕','El botón +','Desde cualquier pantalla: gasto, ingreso, ahorro, inversión, pago de deuda, transferencia entre cuentas, meta o cadena.'],
     ['✏️','Editar movimientos','Toca cualquier movimiento para cambiar su monto, categoría, nota o fecha — o borrarlo.'],
     ['📅','Resumen del mes','En Inicio o Análisis: tu cierre con calificación, ingresos vs gastos y tus mayores gastos.'],
-    ['🔔','Notificaciones','Toca la campana en Inicio para ver pagos, topes y deudas pendientes. Actívalas en el celular desde Perfil → Notificaciones.'],
+    ['🔔','Notificaciones','Toca la campana en Inicio para ver pagos, topes y deudas. Actívalas en el celular desde Perfil → Notificaciones, o exporta tus fechas a Google Calendar para avisos por celular y correo.'],
     ['💾','Tus datos','Se guardan solos en tu dispositivo. En Perfil puedes exportar un respaldo o restaurarlo en otro lado.'],
   ];
   openSheet(`<h2>Guía rápida</h2><div class="hd-sub">Cómo sacarle el jugo a tu Wealth OS</div>
@@ -1752,6 +1816,7 @@ function sheetNotifs(){
   ${perm==='denied'?`<div class="verdict bad" style="margin-bottom:14px">🔕<div><b style="display:block">Bloqueadas</b>Actívalas para este sitio desde los ajustes de tu navegador.</div></div>`:''}
   ${perm==='unsupported'?`<div class="verdict warn" style="margin-bottom:14px">📱<div><b style="display:block">Instala la app</b>Para recibir avisos en el celular, agrégala a tu pantalla de inicio.</div></div>`:''}
   ${on&&perm==='granted'?`<div class="verdict ok" style="margin-bottom:14px">🔔<div><b style="display:block">Avisos activados</b>Te notificaré al abrir la app. Ajusta qué en Perfil → Notificaciones.</div></div>`:''}
+  <button class="btn ghost" style="margin-bottom:14px" data-act="exporticalendar">📅 Exportar todo a mi calendario</button>
   ${items.length?items.map(i=>`<div class="alert ${i.pr>=2?'red':'blu'}"${i.act?` data-act="${i.act}"${i.off!==undefined?` data-off="${i.off}"`:''}${i.rid?` data-rid="${i.rid}"`:''} style="cursor:pointer"`:''}><div class="ab">${i.icon}</div><div style="flex:1"><b>${i.title}</b><small>${esc(i.body)}</small></div></div>`).join(''):`<div class="empty" style="padding:30px"><div class="ee">✨</div><p>Todo al día. Sin pendientes.</p></div>`}`);
 }
 
@@ -1779,7 +1844,8 @@ function sheetMonthSummary(off){
   ${m.top.length?`<div class="divlab">En qué se fue</div><div class="card flat" style="padding:6px 14px">${m.top.map(t=>{const pct=m.exp>0?Math.round(t.v/m.exp*100):0;return `<div class="catrow" style="padding:9px 0"><div class="em">${t.cat.e}</div><div class="body"><div class="top"><span>${t.cat.n}</span><span class="num">${fmt(t.v)} <span class="pct">${pct}%</span></span></div><div class="track"><i style="width:${pct}%;background:var(--neg)"></i></div></div></div>`;}).join('')}</div>`:''}
   ${(()=>{const rs=(S.receivables||[]).filter(r=>((r.amount||0)-(r.collected||0))>0);if(!rs.length)return '';const tot=receivablesTotal(S);return `<div class="divlab">Te deben (${fmt(tot)})</div><div class="card flat" style="padding:2px 14px">${rs.map((r,i)=>{const rem=(r.amount||0)-(r.collected||0);const due=r.dueDate?new Date(r.dueDate+'T00:00'):null;const dn=due?relDaysNum(due):null;const late=dn!==null&&dn<0;return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0${i<rs.length-1?';border-bottom:1px solid var(--line)':''}"><div><b style="font-size:13.5px;font-weight:700">${esc(r.name)}</b><div style="font-size:11.5px;color:${late?'var(--neg)':'var(--faint)'};font-weight:600">${due?(late?'venció '+fmtDayShort(due):'cobrar '+fmtDayShort(due)):'sin fecha'}</div></div><b class="num" style="color:var(--blue);font-size:14px">${fmt(rem)}</b></div>`;}).join('')}</div>`;})()}
   <div class="verdict ${verdict[3]==='g'?'ok':verdict[3]==='r'?'bad':'warn'}" style="margin-top:14px">${verdict[0]}<div><b style="display:block">${verdict[1]}</b>${verdict[2]}</div></div>
-  <button class="btn primary" style="margin-top:14px" data-act="closesheet">Cerrar</button>`);
+  <button class="btn primary" style="margin-top:14px" data-act="sharemonth" data-off="${off}">📤 Compartir resumen</button>
+  <button class="btn ghost" style="margin-top:10px" data-act="closesheet">Cerrar</button>`);
 }
 
 let OB={step:0,name:'',income:'',payFreq:'monthly',paydays:[30],banco:'',efectivo:'',ahorros:'',inversiones:'',fijos:'',rate:20,gName:'',gTarget:'',gDate:'',dName:'',dBal:'',dRate:'',dMin:''};
@@ -1960,7 +2026,73 @@ function setupPWA(){
     const u=URL.createObjectURL(new Blob([JSON.stringify(m)],{type:'application/json'}));
     const l=document.createElement('link');l.rel='manifest';l.href=u;document.head.appendChild(l);
     const al=document.createElement('link');al.rel='apple-touch-icon';al.href=APP_ICON;document.head.appendChild(al);
+    const fav=document.createElement('link');fav.rel='icon';fav.type='image/svg+xml';fav.href=APP_ICON;document.head.appendChild(fav);
   }catch(e){}
+}
+async function shareOrDownload(dataUrl,filename){
+  try{if(navigator.canShare&&navigator.share){const blob=await (await fetch(dataUrl)).blob();const file=new File([blob],filename,{type:'image/png'});if(navigator.canShare({files:[file]})){await navigator.share({files:[file],title:'Mi resumen del mes'});return;}}}catch(e){}
+  try{const a=document.createElement('a');a.href=dataUrl;a.download=filename;document.body.appendChild(a);a.click();a.remove();toast('Imagen descargada ✓');}catch(e){toast('No se pudo exportar');}
+}
+function exportMonthImage(off){
+  off=off||0;const m=monthSummary(S,off),nw=netWorth(S);
+  const W=1080,H=1350,c=document.createElement('canvas');c.width=W;c.height=H;
+  const x=c.getContext&&c.getContext('2d');if(!x){toast('No disponible en este navegador');return;}
+  const acc=ACCENTS[S.profile.accent||'aurora']||ACCENTS.aurora,F='Inter, sans-serif';
+  const rr=(X,Y,w,h,r)=>{x.beginPath();x.moveTo(X+r,Y);x.arcTo(X+w,Y,X+w,Y+h,r);x.arcTo(X+w,Y+h,X,Y+h,r);x.arcTo(X,Y+h,X,Y,r);x.arcTo(X,Y,X+w,Y,r);x.closePath();};
+  x.fillStyle='#0B0C11';x.fillRect(0,0,W,H);
+  const g=x.createLinearGradient(0,0,W,340);g.addColorStop(0,acc.c[0]);g.addColorStop(0.5,acc.c[1]);g.addColorStop(1,acc.c[2]);
+  x.globalAlpha=0.15;x.fillStyle=g;x.fillRect(0,0,W,360);x.globalAlpha=1;
+  x.textAlign='left';x.fillStyle='#9CA3B4';x.font='700 30px '+F;x.fillText('MY WEALTH OS',70,92);
+  x.fillStyle='#F4F6FB';x.font='900 60px '+F;x.fillText('Resumen del mes',70,168);
+  x.fillStyle=acc.c[0];x.font='800 40px '+F;const cap=m.monthName.charAt(0).toUpperCase()+m.monthName.slice(1);x.fillText(cap,70,224);
+  rr(70,286,W-140,182,32);x.fillStyle='#15161F';x.fill();
+  x.fillStyle='#616A7D';x.font='800 26px '+F;x.fillText('CALIFICACIÓN',110,348);
+  x.fillStyle=acc.c[0];x.font='900 120px '+F;x.fillText(m.grade,110,456);
+  x.fillStyle='#F4F6FB';x.font='800 40px '+F;x.textAlign='right';x.fillText(m.gradeLabel,W-110,440);x.textAlign='left';
+  const sy=498,sh=178,sw=(W-140-40)/3,stats=[['Ingresos',fmtShort(m.inc),acc.c[0]],['Gastos',fmtShort(m.exp),'#FF6584'],['Ahorrado',fmtShort(m.sav),'#35D6E8']];
+  stats.forEach((st,i)=>{const sx=70+i*(sw+20);rr(sx,sy,sw,sh,26);x.fillStyle='#15161F';x.fill();x.textAlign='center';x.fillStyle='#9CA3B4';x.font='700 26px '+F;x.fillText(st[0],sx+sw/2,sy+54);x.fillStyle=st[2];x.font='900 44px '+F;x.fillText(st[1],sx+sw/2,sy+120);});x.textAlign='left';
+  const ny=sy+sh+28;rr(70,ny,W-140,210,32);x.fillStyle='#15161F';x.fill();
+  x.textAlign='center';x.fillStyle='#9CA3B4';x.font='700 28px '+F;x.fillText('PATRIMONIO NETO',W/2,ny+80);
+  x.fillStyle='#F4F6FB';x.font='900 82px '+F;x.fillText(fmt(nw),W/2,ny+172);
+  let yy=ny+210+72;x.font='800 36px '+F;x.fillStyle=m.nwCh>=0?acc.c[0]:'#FF6584';
+  x.fillText((m.nwCh>=0?'▲ +':'▼ ')+fmtShort(Math.abs(m.nwCh))+(m.growthPct?` (${m.growthPct>=0?'+':''}${m.growthPct}%)`:'')+' este mes',W/2,yy);
+  yy+=56;x.fillStyle='#9CA3B4';x.font='700 30px '+F;x.fillText('Tasa de ahorro '+m.rate+'%  ·  Balance '+(m.net>=0?'+':'−')+fmtShort(Math.abs(m.net)),W/2,yy);
+  x.fillStyle='#616A7D';x.font='700 26px '+F;x.fillText('Generado con My Wealth OS',W/2,H-64);x.textAlign='left';
+  shareOrDownload(c.toDataURL('image/png'),'wealthos-'+cap.replace(/\s/g,'-').toLowerCase()+'.png');
+  toast('Preparando imagen…');
+}
+/* ===== EXPORTAR RECORDATORIOS AL CALENDARIO (.ics) ===== */
+function pad2(n){return String(n).padStart(2,'0');}
+function icsAt9(d){return d.getFullYear()+pad2(d.getMonth()+1)+pad2(d.getDate())+'T090000';}
+function icsStamp(){const n=new Date();return n.getUTCFullYear()+pad2(n.getUTCMonth()+1)+pad2(n.getUTCDate())+'T'+pad2(n.getUTCHours())+pad2(n.getUTCMinutes())+pad2(n.getUTCSeconds())+'Z';}
+function icsEsc(t){return String(t).replace(/\\/g,'\\\\').replace(/;/g,'\\;').replace(/,/g,'\\,').replace(/\n/g,'\\n');}
+function vevent(uid,date,summary,desc,rrule){
+  return ['BEGIN:VEVENT','UID:'+uid+'-'+date.getTime()+'@wealthos','DTSTAMP:'+icsStamp(),'DTSTART:'+icsAt9(date),'DURATION:PT30M','SUMMARY:'+icsEsc(summary),desc?('DESCRIPTION:'+icsEsc(desc)):null,rrule?('RRULE:'+rrule):null,'BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:'+icsEsc(summary),'TRIGGER:-P1D','END:VALARM','BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:'+icsEsc(summary),'TRIGGER:PT0S','END:VALARM','END:VEVENT'].filter(Boolean).join('\r\n');
+}
+function buildICS(s){
+  const now=new Date(),today=new Date(now.getFullYear(),now.getMonth(),now.getDate()),ev=[],p=s.profile;
+  const nextMonthly=day=>{let mo=today.getMonth(),yr=today.getFullYear();let d=new Date(yr,mo,Math.min(day,daysInMonth(new Date(yr,mo,1))));if(d<today){mo++;if(mo>11){mo=0;yr++;}d=new Date(yr,mo,Math.min(day,daysInMonth(new Date(yr,mo,1))));}return d;};
+  const yNext=(mo,d)=>{let dt=new Date(now.getFullYear(),mo,d);if(dt<today)dt=new Date(now.getFullYear()+1,mo,d);return dt;};
+  const net=p.income||0,pds=paydaysOf(s,today);
+  pds.forEach(day=>ev.push(vevent('pay'+day,nextMonthly(day),'💵 Día de pago'+(net>0?` (~${fmtShort(net/pds.length)})`:''),'Día de pago de tu salario · My Wealth OS','FREQ=MONTHLY;BYMONTHDAY='+day)));
+  if(p.hasCommission&&p.commission>0){const day=p.commissionDay||30;ev.push(vevent('comm',nextMonthly(day),`💸 Comisión (~${fmtShort(p.commission)})`,'Pago de comisión · My Wealth OS','FREQ=MONTHLY;BYMONTHDAY='+day));}
+  (s.recurring||[]).forEach(r=>{if(!r.amount)return;const day=r.day||1,em=r.type==='income'?'💵':catOf(r.type,r.category).e;ev.push(vevent('rec'+r.id,nextMonthly(day),`${em} ${r.name} (${r.type==='income'?'+':'−'}${fmtShort(r.amount)})`,'Movimiento fijo · My Wealth OS','FREQ=MONTHLY;BYMONTHDAY='+day));});
+  (s.chains||[]).forEach(c=>{if(!c.monthly)return;if(c.months>0&&(c.count||0)>=c.months)return;const day=c.day||1;ev.push(vevent('ch'+c.id,nextMonthly(day),`🔗 Cadena ${c.name} (${fmtShort(c.monthly)})`,'Aporte a tu cadena de ahorro · My Wealth OS','FREQ=MONTHLY;BYMONTHDAY='+day));});
+  const pr=prestaciones(s);
+  if(pr){
+    ev.push(vevent('primaJun',yNext(5,30),`🎁 Prima de servicios (~${fmtShort(pr.base*0.5)})`,'Primera prima del año · My Wealth OS','FREQ=YEARLY'));
+    ev.push(vevent('primaDec',yNext(11,20),`🎁 Prima de servicios (~${fmtShort(pr.base*0.5)})`,'Prima de diciembre · My Wealth OS','FREQ=YEARLY'));
+    ev.push(vevent('cesantias',yNext(1,14),`🏦 Consignan cesantías (~${fmtShort(pr.cesantias.annual)})`,'Consignación de cesantías al fondo · My Wealth OS','FREQ=YEARLY'));
+    ev.push(vevent('interesesCes',yNext(0,31),`💰 Intereses a cesantías (~${fmtShort(pr.intereses.amount)})`,'Te pagan los intereses de cesantías · My Wealth OS','FREQ=YEARLY'));
+  }
+  (s.receivables||[]).forEach(rc=>{const rem=(rc.amount||0)-(rc.collected||0);if(rem>0&&rc.dueDate){const d=new Date(rc.dueDate+'T00:00');ev.push(vevent('rcv'+rc.id,d,`🤝 Cobrar a ${rc.name} (${fmtShort(rem)})`,(rc.note?rc.note+' · ':'')+'Fecha de cobro · My Wealth OS',null));}});
+  return ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//My Wealth OS//ES','CALSCALE:GREGORIAN','METHOD:PUBLISH','X-WR-CALNAME:My Wealth OS','X-WR-TIMEZONE:America/Bogota'].concat(ev).concat(['END:VCALENDAR']).join('\r\n');
+}
+async function exportICS(){
+  let ics;try{ics=buildICS(S);}catch(e){toast('No se pudo generar');return;}
+  const blob=new Blob([ics],{type:'text/calendar;charset=utf-8'}),fname='wealthos-recordatorios.ics';
+  try{if(navigator.canShare&&navigator.share){const file=new File([blob],fname,{type:'text/calendar'});if(navigator.canShare({files:[file]})){await navigator.share({files:[file],title:'Mis recordatorios financieros'});return;}}}catch(e){}
+  try{const u=URL.createObjectURL(blob);const a=document.createElement('a');a.href=u;a.download=fname;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1500);toast('Calendario descargado ✓');}catch(e){toast('No se pudo descargar');}
 }
 
 /* ===== RECURRENTES AUTOMÁTICOS ===== */
@@ -2111,14 +2243,34 @@ function sheetEditProfile(){
   openSheet(`<h2>Editar perfil</h2><div class="hd-sub">Ajusta los datos base de tu sistema</div>
   <div style="display:flex;flex-direction:column;align-items:center;margin-bottom:16px"><button id="pfAvatar" class="avatar" data-act="pickphoto" style="width:84px;height:84px;border-radius:26px;font-size:32px;${p.photo?`background-image:url(${p.photo});background-size:cover;background-position:center`:''}">${p.photo?'':(p.name||'U')[0].toUpperCase()}</button><div style="display:flex;gap:14px;margin-top:9px"><span class="lnk" data-act="pickphoto">${p.photo?'Cambiar foto':'Subir foto'}</span>${p.photo?'<span class="lnk" data-act="rmphoto" style="color:var(--neg)">Quitar</span>':''}</div></div>
   <div class="field"><label>Nombre</label><input id="pName" value="${esc(p.name||'')}"></div>
-  <div class="frow"><div class="field"><label>Ingreso mensual</label><input id="pIncome" inputmode="numeric" value="${p.income?p.income.toLocaleString('es-CO'):''}" oninput="moneyInput(this)"></div><div class="field"><label>Meta ahorro %</label><input id="pRate" inputmode="numeric" value="${p.savingsRate}"></div></div>
-  <div class="divlab">¿Cada cuánto te pagan?</div>${payEditor(PF.freq,PF.paydays,'pfreq')}
+  <div class="field"><label>Salario base (bruto)</label><input id="pSalary" inputmode="numeric" value="${p.salaryBase?p.salaryBase.toLocaleString('es-CO'):''}" oninput="moneyInput(this);updateNetPreview()"></div>
+  <div class="frow"><div class="field"><label>Comisión mensual</label><input id="pComm" inputmode="numeric" placeholder="0 = no tengo" value="${p.commission?p.commission.toLocaleString('es-CO'):''}" oninput="moneyInput(this);updateNetPreview()"></div>
+    <div class="field"><label>Día de pago comisión</label><select id="pCommDay" class="field-sel">${Array.from({length:31},(_,i)=>i+1).map(dnum=>`<option value="${dnum}" ${dnum===(p.commissionDay||30)?'selected':''}>Día ${dnum}</option>`).join('')}</select></div></div>
+  <div class="acc" id="pDeduct" data-act="deducttoggle" data-on="${p.deduct?1:0}" style="border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:12px"><div class="ae">🏥</div><div class="an"><b>Deducciones de ley</b><small>Salud 4% + pensión 4% (Colombia)</small></div><div class="as"><div class="tgl" style="background:${p.deduct?'var(--emerald)':'var(--surface-3)'}"><i style="left:${p.deduct?'21px':'3px'}"></i></div></div></div>
+  <div class="verdict ok" id="netPreview" style="margin-bottom:14px"></div>
+  <div class="acc" id="pPresto" data-act="prestogtoggle" data-on="${p.prestaciones?1:0}" style="border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:12px"><div class="ae">🎁</div><div class="an"><b>Prestaciones sociales</b><small>Prima, cesantías, intereses, vacaciones</small></div><div class="as"><div class="tgl" style="background:${p.prestaciones?'var(--emerald)':'var(--surface-3)'}"><i style="left:${p.prestaciones?'21px':'3px'}"></i></div></div></div>
+  <div class="field"><label>Fecha de ingreso al trabajo (opcional)</label><input id="pJobStart" type="date" value="${p.jobStart||''}"><span class="hint">Para calcular tus prestaciones con exactitud.</span></div>
+  <div class="field"><label>Meta de ahorro %</label><input id="pRate" inputmode="numeric" value="${p.savingsRate}"></div>
+  <div class="divlab">¿Cada cuánto te pagan el salario?</div>${payEditor(PF.freq,PF.paydays,'pfreq')}
   <div class="field"><label>Rendimiento anual esperado % (para proyecciones)</label><input id="pRet" inputmode="decimal" value="${p.retRate||11}"><span class="hint">Referencia Colombia: CDT/inflación ~10-12% E.A.</span></div>
   <button class="btn primary" data-act="saveprofile">Guardar</button>`);
+  updateNetPreview();
+}
+function updateNetPreview(){
+  const base=parseNum(val('pSalary')),comm=parseNum(val('pComm')),el=$('#netPreview');if(!el)return;
+  const on=$('#pDeduct')?$('#pDeduct').getAttribute('data-on')==='1':false;
+  const d=payDeductions(base,comm,on),net=Math.max(0,base+comm-d.total);
+  el.innerHTML=`💵<div><b style="display:block">Neto que recibes: ${fmt(net)}/mes</b>${on?`Te descuentan ${fmt(d.total)} (salud ${fmtShort(d.salud)} + pensión ${fmtShort(d.pension)}${d.fsp>0?' + FSP '+fmtShort(d.fsp):''})`:'Sin deducciones aplicadas'}${comm>0?` · incluye comisión ${fmtShort(comm)}`:''}</div>`;
 }
 function saveProfile(){
   const p=S.profile;const n=val('pName').trim();if(n)p.name=n;
-  p.income=parseNum(val('pIncome'));
+  p.salaryBase=parseNum(val('pSalary'));
+  p.commission=parseNum(val('pComm'));p.hasCommission=p.commission>0;
+  p.commissionDay=clamp(parseInt(val('pCommDay'))||30,1,31);
+  p.deduct=$('#pDeduct')?$('#pDeduct').getAttribute('data-on')==='1':false;
+  p.prestaciones=$('#pPresto')?$('#pPresto').getAttribute('data-on')==='1':false;
+  p.jobStart=val('pJobStart')||'';
+  p.income=netIncome(p);
   p.payFreq=PF.freq;p.paydays=readPaydays(PF.freq);
   p.savingsRate=clamp(parseInt(val('pRate'))||0,0,90);p.retRate=parseFloat(val('pRet'))||11;
   closeSheet();commit();
@@ -2128,6 +2280,7 @@ function finishOnboarding(){
   S=DEFAULT();
   S.profile.name=(OB.name||'').trim();
   S.profile.income=parseNum(OB.income);
+  S.profile.salaryBase=parseNum(OB.income);
   S.profile.savingsRate=OB.rate;
   S.profile.payFreq=OB.payFreq||'monthly';
   S.profile.paydays=(OB.paydays&&OB.paydays.length?OB.paydays:defaultPaydays(S.profile.payFreq));
@@ -2157,6 +2310,7 @@ document.addEventListener('click',e=>{
     case 'guide': sheetGuide(); break;
     case 'notifs': sheetNotifs(); break;
     case 'enablenotifs': enableNotifs(); break;
+    case 'exporticalendar': exportICS(); break;
     case 'notiftoggle':{const k=t.dataset.k;S.profile.notif=S.profile.notif||{};S.profile.notif[k]=(S.profile.notif[k]===false);save();render();break;}
     case 'monthsummary': sheetMonthSummary(parseInt(t.dataset.off)||0); break;
     case 'txfilter': TXQ.type=t.dataset.t; t.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('on')); t.classList.add('on'); renderTxList(); break;
@@ -2204,6 +2358,9 @@ document.addEventListener('click',e=>{
     case 'deltx': deleteTx(id); break;
     case 'editprofile': sheetEditProfile(); break;
     case 'saveprofile': saveProfile(); break;
+    case 'deducttoggle':{const on=t.getAttribute('data-on')==='1'?'0':'1';t.setAttribute('data-on',on);const k=t.querySelector('.tgl');if(k){k.style.background=on==='1'?'var(--emerald)':'var(--surface-3)';const dot=k.firstElementChild;if(dot)dot.style.left=on==='1'?'21px':'3px';}updateNetPreview();break;}
+    case 'prestogtoggle':{const on=t.getAttribute('data-on')==='1'?'0':'1';t.setAttribute('data-on',on);const k=t.querySelector('.tgl');if(k){k.style.background=on==='1'?'var(--emerald)':'var(--surface-3)';const dot=k.firstElementChild;if(dot)dot.style.left=on==='1'?'21px':'3px';}break;}
+    case 'sharemonth': exportMonthImage(parseInt(t.dataset.off)||0); break;
     case 'pickphoto': pickPhoto(); break;
     case 'rmphoto': removePhoto(); break;
     case 'budgets': sheetBudgets(); break;
