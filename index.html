@@ -434,6 +434,10 @@ select.field-sel{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://w
 .nbadge{position:absolute;top:-3px;right:-3px;min-width:17px;height:17px;padding:0 4px;border-radius:99px;background:var(--neg);color:#fff;font-size:10px;font-weight:800;display:grid;place-items:center;border:2px solid var(--bg)}
 .tgl{width:46px;height:28px;border-radius:99px;position:relative;transition:.2s;flex:none}
 .tgl>i{width:22px;height:22px;border-radius:50%;background:#fff;position:absolute;top:3px;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.mini-btn{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;font-size:17px;font-weight:800;border:none;flex:none;transition:.15s}
+.mini-btn:active{transform:scale(.9)}
+.mini-btn.ok{background:rgba(23,230,161,.16);color:var(--pos)}
+.mini-btn.no{background:rgba(255,101,132,.12);color:var(--neg)}
 </style>
 </head>
 <body>
@@ -539,8 +543,8 @@ function applyAccent(){
 /* ---------- STATE ---------- */
 let S = null;
 const DEFAULT = ()=>({
-  v:2, profile:{name:'',income:0,salaryBase:0,commission:0,hasCommission:false,commissionDay:30,deduct:false,prestaciones:false,jobStart:'',savingsRate:20,payFreq:'monthly',paydays:[30],theme:'dark',onboarded:false,retRate:11,photo:'',accent:'aurora',hints:{},monthlyBudget:0,notif:{on:false,pagos:true,topes:true,deudas:true,cobros:true,prestaciones:true,flujos:true},notifSeen:[],notifLastVisit:null},
-  accounts:[], tx:[], goals:[], debts:[], recurring:[], nwHist:[], budgets:{}, chains:[], receivables:[], notifFired:{}, notifFired:{}
+  v:2, profile:{name:'',income:0,salaryBase:0,commission:0,hasCommission:false,commissionDay:30,deduct:false,prestaciones:false,jobStart:'',cesantiasInicial:0,vacacionesInicial:0,savingsRate:20,payFreq:'monthly',paydays:[30],theme:'dark',onboarded:false,retRate:11,photo:'',accent:'aurora',hints:{},monthlyBudget:0,notif:{on:false,pagos:true,topes:true,deudas:true,cobros:true,prestaciones:true,flujos:true},notifSeen:[],notifLastVisit:null},
+  accounts:[], tx:[], goals:[], debts:[], recurring:[], nwHist:[], budgets:{}, chains:[], receivables:[], notifFired:{}, confirms:{}, notifFired:{}
 });
 /* rellena campos faltantes y migra formatos viejos (nunca pierde datos) */
 function normalize(st){
@@ -560,10 +564,14 @@ function normalize(st){
   if(typeof st.profile.deduct!=='boolean')st.profile.deduct=false;
   if(typeof st.profile.prestaciones!=='boolean')st.profile.prestaciones=false;
   if(typeof st.profile.jobStart!=='string')st.profile.jobStart='';
+  if(typeof st.profile.cesantiasInicial!=='number')st.profile.cesantiasInicial=0;
+  if(typeof st.profile.vacacionesInicial!=='number')st.profile.vacacionesInicial=0;
   st.profile.notif=Object.assign({on:false,pagos:true,topes:true,deudas:true,cobros:true,prestaciones:true,flujos:true},st.profile.notif||{});
   if(!Array.isArray(st.profile.notifSeen))st.profile.notifSeen=[];
   if(st.profile.notifLastVisit===undefined)st.profile.notifLastVisit=null;
   if(!st.notifFired||typeof st.notifFired!=='object')st.notifFired={};
+  if(!st.confirms||typeof st.confirms!=='object')st.confirms={};
+  if(typeof st.profile.salarySince!=='string')st.profile.salarySince='';
   st.recurring.forEach(r=>{ if(r.type!=='income')r.type='expense'; if(!r.day)r.day=1;
     if(r.auto===undefined)r.auto=true; if(!r.category)r.category=r.type==='income'?'salary':'services';
     if(r.lastPostedISO===undefined)r.lastPostedISO=null; });
@@ -675,8 +683,15 @@ function prestaciones(s){
   else{primaDate=new Date(y+1,5,30);primaAmount=base*0.5;}
   const ys=new Date(y,0,1),efY=start>ys?start:ys,daysY=Math.min(360,between(efY,now));
   const cesAccrued=base*daysY/360,intAccrued=cesAccrued*0.12;
-  const vacDays=Math.round(15*daysY/360),vacValue=base*daysY/720;
-  return {base,prima:{amount:primaAmount,date:primaDate},cesantias:{accrued:cesAccrued,annual:base,date:nextOf(1,14)},intereses:{amount:intAccrued,date:nextOf(0,31)},vacaciones:{days:vacDays,value:vacValue}};
+  const vacDaysY=Math.round(15*daysY/360);
+  const cesIni=p.cesantiasInicial||0,vacIni=p.vacacionesInicial||0;
+  const dec31=new Date(y,11,31),daysEoy=Math.min(360,between(efY,dec31));
+  const cesTotal=cesIni+cesAccrued, cesEoy=cesIni+base*daysEoy/360;
+  const vacDaysTotal=vacIni+vacDaysY, vacValue=vacDaysTotal*base/30;
+  return {base,prima:{amount:primaAmount,date:primaDate},
+    cesantias:{accrued:cesAccrued,inicial:cesIni,total:cesTotal,eoy:cesEoy,annual:base,date:nextOf(1,14)},
+    intereses:{amount:intAccrued,date:nextOf(0,31)},
+    vacaciones:{daysYear:vacDaysY,inicial:vacIni,days:vacDaysTotal,value:vacValue}};
 }
 function netWorth(s){return assetsOf(s)+receivablesTotal(s)-liabOf(s);}
 function availableOf(s){return sum(s.accounts.filter(a=>LIQUID.includes(a.type)).map(a=>a.balance));}
@@ -971,6 +986,8 @@ function relDays(d){const now=new Date(),t=new Date(now.getFullYear(),now.getMon
 function upcomingPayments(s,days){
   const now=new Date(),today=new Date(now.getFullYear(),now.getMonth(),now.getDate()),lim=new Date(today);lim.setDate(lim.getDate()+(days||31));
   const out=[],p=s.profile;
+  const salNet=(p.salaryBase||0)-payDeductions(p.salaryBase||0,0,p.deduct).total;
+  if(salNet>0){const pd=paydaysOf(s,today);pd.forEach(day=>{const d=nextOccurrenceAfter(day,today);if(d<=lim)out.push({date:d,name:'Pago de nómina',amount:salNet/pd.length,type:'income',emoji:'💵'});});}
   if(p.hasCommission&&p.commission>0){const d=nextOccurrenceAfter(p.commissionDay||30,today);if(d<=lim)out.push({date:d,name:'Comisión',amount:p.commission,type:'income',emoji:'💸'});}
   const pr=prestaciones(s);
   if(pr){if(pr.prima.date<=lim&&pr.prima.amount>0)out.push({date:pr.prima.date,name:'Prima de servicios',amount:pr.prima.amount,type:'income',emoji:'🎁'});if(pr.intereses.date<=lim&&pr.intereses.amount>0)out.push({date:pr.intereses.date,name:'Intereses de cesantías',amount:pr.intereses.amount,type:'income',emoji:'🏦'});}
@@ -978,6 +995,27 @@ function upcomingPayments(s,days){
   (s.chains||[]).forEach(c=>{if(!c.auto||!c.monthly)return;if(c.months>0&&(c.count||0)>=c.months)return;const d=nextOccurrenceAfter(c.day||1,today);if(d<=lim)out.push({date:d,name:c.name,amount:c.monthly,type:'saving',emoji:'🔗'});});
   out.sort((a,b)=>a.date-b.date);
   return out;
+}
+/* ===== PAGOS ESPERADOS: confirmaciones (sin digitar) ===== */
+function isoD(d){return d.toISOString().slice(0,10);}
+function monthlyOccWindow(days,from,to){const res=[];let cur=new Date(from.getFullYear(),from.getMonth(),1);while(cur<=to){days.forEach(day=>{const dim=daysInMonth(cur),d=new Date(cur.getFullYear(),cur.getMonth(),Math.min(day,dim));if(d>=from&&d<=to)res.push(d);});cur=new Date(cur.getFullYear(),cur.getMonth()+1,1);}return res;}
+function yearlyOccWindow(mo,day,from,to){const res=[];for(let y=from.getFullYear();y<=to.getFullYear();y++){const d=new Date(y,mo,day);if(d>=from&&d<=to)res.push(d);}return res;}
+function pendingConfirms(s){
+  const now=new Date(),today=new Date(now.getFullYear(),now.getMonth(),now.getDate()),done=s.confirms||{},p=s.profile,out=[];
+  let from=new Date(today);from.setDate(from.getDate()-40);
+  if(p.salarySince){const fl=new Date(p.salarySince+'T00:00');if(fl>from)from=fl;}
+  else if(p.start){const st=new Date(p.start+'T00:00');if(st>from)from=st;}
+  const pdRaw=(p.paydays&&p.paydays.length)?p.paydays:defaultPaydays(p.payFreq);
+  const salNet=(p.salaryBase||0)-payDeductions(p.salaryBase||0,0,p.deduct).total;
+  if(salNet>0&&pdRaw.length){const per=salNet/pdRaw.length;monthlyOccWindow(pdRaw,from,today).forEach(d=>{const k='sal:'+isoD(d);if(!done[k])out.push({key:k,date:d,amount:per,label:'Pago de nómina',emoji:'💵',category:'salary'});});}
+  if(p.hasCommission&&p.commission>0){const cn=p.commission-(p.deduct?p.commission*0.08:0);monthlyOccWindow([p.commissionDay||30],from,today).forEach(d=>{const k='com:'+isoD(d);if(!done[k])out.push({key:k,date:d,amount:cn,label:'Comisión',emoji:'💸',category:'business'});});}
+  if(p.prestaciones){const pr=prestaciones(s);if(pr){
+    yearlyOccWindow(5,30,from,today).forEach(d=>{const k='prJun:'+isoD(d);if(!done[k])out.push({key:k,date:d,amount:pr.base*0.5,label:'Prima de servicios',emoji:'🎁',category:'other'});});
+    yearlyOccWindow(11,20,from,today).forEach(d=>{const k='prDec:'+isoD(d);if(!done[k])out.push({key:k,date:d,amount:pr.base*0.5,label:'Prima de servicios',emoji:'🎁',category:'other'});});
+    yearlyOccWindow(0,31,from,today).forEach(d=>{const k='int:'+isoD(d);if(!done[k])out.push({key:k,date:d,amount:pr.intereses.amount,label:'Intereses de cesantías',emoji:'💰',category:'interest'});});
+  }}
+  out.sort((a,b)=>a.date-b.date);
+  return out.slice(0,6);
 }
 function chartRing(pct){
   const size=132,sw=13,r=size/2-sw/2-2,cx=size/2,cy=size/2,C=2*Math.PI*r,p=clamp(pct,0,1),len=p*C;
@@ -990,7 +1028,8 @@ function relDaysNum(d){const now=new Date(),t=new Date(now.getFullYear(),now.get
 function notifItems(s){
   const out=[],P=s.profile.notif||{},now=new Date(),mk=mkey(now);
   if(P.pagos!==false){upcomingPayments(s,7).forEach(u=>{const dn=relDaysNum(u.date);
-    out.push({key:'pay:'+u.name+':'+u.date.toISOString().slice(0,10),icon:u.emoji,title:(u.type==='income'?'Cobro ':'Pago ')+relDays(u.date),body:`${u.name}: ${u.type==='income'?'+':'−'}${fmt(u.amount)} · ${fmtDayShort(u.date)}`,pr:dn<=1?2:1});});}
+    out.push({key:'pay:'+u.name+':'+u.date.toISOString().slice(0,10),icon:u.emoji,title:(u.type==='income'?'Cobro ':'Pago ')+relDays(u.date),body:`${u.name}: ${u.type==='income'?'+':'−'}${fmt(u.amount)} · ${fmtDayShort(u.date)}`,pr:dn<=1?2:1});});
+    pendingConfirms(s).forEach(pc=>{out.push({key:'confirm:'+pc.key,icon:pc.emoji,title:'¿Recibiste tu pago?',body:`${pc.label} de ${fmtDayShort(pc.date)}: confirma si recibiste ${fmt(pc.amount)}`,pr:2,act:'confirmpay',ck:pc.key});});}
   if(P.topes!==false){const mb=s.profile.monthlyBudget,spentM=sum(Object.values(monthCats(s,0)));
     if(mb>0&&spentM>mb)out.push({key:'budT:'+mk,icon:'🚨',title:'Tope del mes superado',body:`Llevas ${fmt(spentM)} de ${fmt(mb)}.`,pr:2});
     else if(mb>0&&spentM>=mb*.85)out.push({key:'budT85:'+mk,icon:'⚠️',title:'Cerca del tope del mes',body:`Vas al ${Math.round(spentM/mb*100)}% de tu presupuesto.`,pr:1});
@@ -1182,7 +1221,7 @@ function viewHome(){
   const perLabel=(FREQS[p.freq]||FREQS.monthly).n.toLowerCase();
   const QA=[['expense','Gasto',IC.minus],['income','Ingreso',IC.plus],['saving','Ahorro',IC.save],['investment','Invertir',IC.invest],['debt','Deuda',IC.debt]];
   const recent=[...s.tx].sort((a,b)=>b.date<a.date?-1:b.date>a.date?1:(b.id<a.id?-1:1)).slice(0,4);
-  const al=alerts(s), ins=insights(s).slice(0,2), upc=upcomingPayments(s,31).slice(0,4);
+  const al=alerts(s), ins=insights(s).slice(0,2), upc=upcomingPayments(s,31).slice(0,4), pend=pendingConfirms(s);
   return `<div class="stagger">
   <div class="hdr" style="--i:0"><div><div class="hi">${greeting()}, <b>${esc(s.profile.name||'')}</b></div><div class="date">${todayLong()}</div></div>
     <div style="display:flex;gap:9px">${(()=>{const nu=notifUnread(s);return `<button class="iconbtn" data-act="notifs" style="position:relative">${svg(IC.bell,2.1)}${nu>0?`<span class="nbadge">${nu>9?'9+':nu}</span>`:''}</button>`;})()}<button class="iconbtn" data-act="theme">${svg(s.profile.theme==='dark'?IC.sun:IC.moon,2.1)}</button>${avatarBtn('avatar','','tab','profile')}</div></div>
@@ -1211,7 +1250,10 @@ function viewHome(){
   <button class="treat" style="--i:5;margin-top:10px" data-act="monthsummary" data-off="0"><div class="em">📅</div><div class="tx"><b>Resumen del mes</b><small>Mira tu cierre con calificación</small></div><div class="arw">${svg(IC.arrow,2.4)}</div></button>
   ${(()=>{const rt=receivablesTotal(s),pend=(s.receivables||[]).filter(r=>((r.amount||0)-(r.collected||0))>0);if(rt<=0)return '';const next=pend.filter(r=>r.dueDate).sort((a,b)=>a.dueDate<b.dueDate?-1:1)[0];return `<button class="card" style="--i:6;margin-top:14px;display:flex;align-items:center;gap:13px;width:100%;text-align:left;border:1px solid var(--line-2)" data-act="receivableslist"><div class="em" style="width:44px;height:44px;border-radius:13px;display:grid;place-items:center;font-size:21px;background:rgba(77,166,255,.14);flex:none">🤝</div><div style="flex:1"><b style="font-size:14.5px;font-weight:800;display:block">Te deben ${fmt(rt)}</b><small style="font-size:12px;color:var(--dim);font-weight:500">${pend.length} ${pend.length===1?'persona':'personas'}${next?` · próximo: ${esc(next.name)} el ${fmtDayShort(new Date(next.dueDate+'T00:00'))}`:''}</small></div><div class="arw" style="color:var(--faint)">${svg(IC.arrow,2.4)}</div></button>`;})()}
 
-  ${al.length?`<div style="--i:6;margin-top:18px">${al.map(a=>`<div class="alert ${a.c}"><div class="ab">${a.e}</div><div><b>${a.t}</b><small>${a.d}</small></div></div>`).join('')}</div>`:''}
+  ${pend.length?`<div class="sect-h" style="--i:6"><h3>Confirma tus pagos</h3><span class="pill">${pend.length}</span></div>
+  <div class="card" style="--i:6;border:1px solid var(--line-2)">${pend.map(pc=>`<div class="row" data-act="confirmpay" data-k="${pc.key}"><div class="em">${pc.emoji}</div><div class="mid"><b>¿Recibiste ${esc(pc.label.toLowerCase())}?</b><small>${fmtDayShort(pc.date)} · esperado ${fmt(pc.amount)}</small></div><div style="display:flex;gap:7px"><button class="mini-btn ok" data-act="confirmquick" data-k="${pc.key}">✓</button><button class="mini-btn no" data-act="skipconfirm" data-k="${pc.key}">✕</button></div></div>`).join('')}</div>`:''}
+
+  ${al.length?`<div style="--i:7;margin-top:18px">${al.map(a=>`<div class="alert ${a.c}"><div class="ab">${a.e}</div><div><b>${a.t}</b><small>${a.d}</small></div></div>`).join('')}</div>`:''}
 
   ${upc.length?`<div class="sect-h" style="--i:7"><h3>Próximos pagos</h3><span class="pill">${upc.length}</span></div>
   <div class="card" style="--i:7">${upc.map(u=>`<div class="row"><div class="em">${u.emoji}</div><div class="mid"><b>${esc(u.name)}</b><small>${relDays(u.date)} · ${fmtDayShort(u.date)}</small></div><div class="amt num ${u.type==='income'?'up':''}">${u.type==='income'?'+':'−'}${fmt(u.amount)}</div></div>`).join('')}</div>`:''}
@@ -1386,11 +1428,13 @@ function viewProfile(){
   ${(()=>{const pr=prestaciones(s);if(!pr)return '';const row=(e,label,amount,sub)=>`<div class="acc" style="border:none;padding:11px 0"><div class="ae">${e}</div><div class="an"><b>${label}</b><small>${sub}</small></div><div class="as"><b class="num" style="color:var(--pos)">${fmtShort(amount)}</b></div></div>`;
     return `<div class="sect-h" style="--i:2"><h3>Prestaciones sociales</h3></div>
     <div class="card" style="--i:2;padding:2px 15px">
-      ${row('🎁','Prima de servicios',pr.prima.amount,'próxima: '+fmtDayShort(pr.prima.date))}
-      ${row('🏦','Cesantías (acumuladas)',pr.cesantias.accrued,'consignan '+fmtDayShort(pr.cesantias.date))}
+      ${row('🎁','Prima de servicios',pr.prima.amount,'próximo corte: '+fmtDayShort(pr.prima.date))}
+      ${row('🏦','Cesantías',pr.cesantias.total,`acumulado${pr.cesantias.inicial>0?' (incl. '+fmtShort(pr.cesantias.inicial)+' previo)':''} · consignan ${fmtDayShort(pr.cesantias.date)}`)}
       ${row('💰','Intereses a cesantías',pr.intereses.amount,'te pagan '+fmtDayShort(pr.intereses.date))}
       ${row('🏖️','Vacaciones',pr.vacaciones.value,pr.vacaciones.days+' días acumulados')}
-    </div><div class="mono-small" style="--i:2;margin:8px 2px 0">Estimado sobre ${fmt(pr.base)}/mes${p.jobStart?'':' · agrega tu fecha de ingreso para más exactitud'}.</div>`;})()}
+    </div>
+    <div class="card flat" style="--i:2;margin-top:10px;padding:13px 15px"><div style="font-size:12px;font-weight:800;color:var(--dim);margin-bottom:7px">📅 Proyección a fin de año</div><div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600"><span style="color:var(--dim)">Cesantías al 31 dic</span><b class="num">${fmt(pr.cesantias.eoy)}</b></div><div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-top:6px"><span style="color:var(--dim)">Prima de diciembre</span><b class="num">${fmt(pr.base*0.5)}</b></div></div>
+    <div class="mono-small" style="--i:2;margin:8px 2px 0">Contado desde ${p.jobStart?fmtDayShort(new Date(p.jobStart+'T00:00'))+' '+new Date(p.jobStart+'T00:00').getFullYear():'inicio de año'} · estimado sobre ${fmt(pr.base)}/mes.</div>`;})()}
 
   <div class="sect-h" style="--i:3"><h3>Mi dinero</h3><span class="lnk" data-act="addaccount">+ Cuenta</span></div>
   <div class="card" style="--i:3">${accs.length?accs.map(a=>`<div class="acc" data-act="editacc" data-id="${a.id}"><div class="ae">${ACC_TYPES[a.type].e}</div><div class="an"><b>${esc(a.name)}</b><small>${ACC_TYPES[a.type].n}${a.type==='credit'||assets<=0?'':' · '+Math.round(a.balance/assets*100)+'% patrimonio'}</small></div><div class="as"><b class="num" style="${a.balance<0?'color:var(--neg)':''}">${fmt(a.balance)}</b></div></div>`).join(''):`<div class="empty" style="padding:18px"><p>Agrega dónde tienes tu dinero.</p></div>`}</div>
@@ -1569,6 +1613,17 @@ function sheetCollect(rc){
   <div class="amtin"><span class="cur">$</span><input id="rcAmt" inputmode="numeric" placeholder="${rem.toLocaleString('es-CO')}" value="${rem.toLocaleString('es-CO')}" oninput="moneyInput(this)"></div>
   <div class="field"><label>Entra a</label><select id="rcTo" style="width:100%;padding:14px 15px;border-radius:14px;background:var(--surface);border:1.5px solid var(--line);font-size:14px;font-weight:600">${liquid.length?accOpts(liquid,''):'<option value="__auto">Cuenta principal</option>'}</select></div>
   <button class="btn primary" data-act="savecollect" data-id="${rc.id}">Registrar cobro</button>`);
+}
+/* ---- CONFIRMAR PAGO RECIBIDO ---- */
+function sheetConfirmPay(key){
+  const it=pendingConfirms(S).find(i=>i.key===key);if(!it){toast('Ese pago ya no está pendiente');return;}
+  const liquid=S.accounts.filter(a=>LIQUID.includes(a.type));
+  openSheet(`<h2>¿Recibiste este pago?</h2><div class="hd-sub">${it.emoji} ${it.label} · ${fmtDayShort(it.date)}</div>
+  <div class="hd-sub" style="margin-bottom:8px">Ya está calculado, solo confirma. Ajusta el monto si llegó distinto.</div>
+  <div class="amtin"><span class="cur">$</span><input id="cfAmt" inputmode="numeric" value="${Math.round(it.amount).toLocaleString('es-CO')}" oninput="moneyInput(this)" style="color:var(--pos)"></div>
+  <div class="field"><label>Entra a</label><select id="cfAcc" style="width:100%;padding:14px 15px;border-radius:14px;background:var(--surface);border:1.5px solid var(--line);font-size:14px;font-weight:600">${liquid.length?accOpts(liquid,''):'<option value="__auto">Cuenta principal</option>'}</select></div>
+  <button class="btn primary" data-act="confirmpaysave" data-k="${key}">✓ Sí, lo recibí</button>
+  <button class="btn ghost" style="margin-top:10px" data-act="skipconfirm" data-k="${key}">Aún no / no lo recibí</button>`);
 }
 /* ---- DETALLE: TODOS LOS QUE TE DEBEN ---- */
 function sheetReceivablesList(){
@@ -1817,7 +1872,7 @@ function sheetNotifs(){
   ${perm==='unsupported'?`<div class="verdict warn" style="margin-bottom:14px">📱<div><b style="display:block">Instala la app</b>Para recibir avisos en el celular, agrégala a tu pantalla de inicio.</div></div>`:''}
   ${on&&perm==='granted'?`<div class="verdict ok" style="margin-bottom:14px">🔔<div><b style="display:block">Avisos activados</b>Te notificaré al abrir la app. Ajusta qué en Perfil → Notificaciones.</div></div>`:''}
   <button class="btn ghost" style="margin-bottom:14px" data-act="exporticalendar">📅 Exportar todo a mi calendario</button>
-  ${items.length?items.map(i=>`<div class="alert ${i.pr>=2?'red':'blu'}"${i.act?` data-act="${i.act}"${i.off!==undefined?` data-off="${i.off}"`:''}${i.rid?` data-rid="${i.rid}"`:''} style="cursor:pointer"`:''}><div class="ab">${i.icon}</div><div style="flex:1"><b>${i.title}</b><small>${esc(i.body)}</small></div></div>`).join(''):`<div class="empty" style="padding:30px"><div class="ee">✨</div><p>Todo al día. Sin pendientes.</p></div>`}`);
+  ${items.length?items.map(i=>`<div class="alert ${i.pr>=2?'red':'blu'}"${i.act?` data-act="${i.act}"${i.off!==undefined?` data-off="${i.off}"`:''}${i.rid?` data-rid="${i.rid}"`:''}${i.ck?` data-k="${i.ck}"`:''} style="cursor:pointer"`:''}><div class="ab">${i.icon}</div><div style="flex:1"><b>${i.title}</b><small>${esc(i.body)}</small></div></div>`).join(''):`<div class="empty" style="padding:30px"><div class="ee">✨</div><p>Todo al día. Sin pendientes.</p></div>`}`);
 }
 
 /* ---- RESUMEN DEL MES (cierre) ---- */
@@ -1991,6 +2046,22 @@ function saveCollect(id){
   S.tx.push({id:uid(),type:'collect',amount:amt,date:todayISO(),note:'Cobro a '+rc.name,category:'other',accountId:to.id,receivableId:rc.id});
   closeSheet(); commit();
 }
+function confirmQuick(key){
+  const it=pendingConfirms(S).find(i=>i.key===key);if(!it)return;
+  const a=accOr('','bank');a.balance+=it.amount;
+  const tx={id:uid(),type:'income',amount:Math.round(it.amount),date:isoD(it.date),note:it.label,category:it.category,accountId:a.id,confirm:key};
+  S.tx.push(tx);S.confirms=S.confirms||{};S.confirms[key]={status:'confirmed',txId:tx.id};
+  commit();toast('Pago confirmado ✓');
+}
+function confirmPaySave(key){
+  const it=pendingConfirms(S).find(i=>i.key===key);if(!it){closeSheet();return;}
+  const amt=parseNum(val('cfAmt'))||Math.round(it.amount);if(amt<=0)return;
+  const a=accOr(val('cfAcc'),'bank');a.balance+=amt;
+  const tx={id:uid(),type:'income',amount:amt,date:isoD(it.date),note:it.label,category:it.category,accountId:a.id,confirm:key};
+  S.tx.push(tx);S.confirms=S.confirms||{};S.confirms[key]={status:'confirmed',txId:tx.id};
+  closeSheet();commit();toast('Pago confirmado ✓');
+}
+function skipConfirm(key){S.confirms=S.confirms||{};S.confirms[key]={status:'skipped'};closeSheet();commit();toast('Marcado como no recibido');}
 function deleteTx(id){
   const i=S.tx.findIndex(x=>x.id===id);if(i<0)return;const t=S.tx[i];
   applyTxEffect(t,-1);
@@ -2249,7 +2320,9 @@ function sheetEditProfile(){
   <div class="acc" id="pDeduct" data-act="deducttoggle" data-on="${p.deduct?1:0}" style="border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:12px"><div class="ae">🏥</div><div class="an"><b>Deducciones de ley</b><small>Salud 4% + pensión 4% (Colombia)</small></div><div class="as"><div class="tgl" style="background:${p.deduct?'var(--emerald)':'var(--surface-3)'}"><i style="left:${p.deduct?'21px':'3px'}"></i></div></div></div>
   <div class="verdict ok" id="netPreview" style="margin-bottom:14px"></div>
   <div class="acc" id="pPresto" data-act="prestogtoggle" data-on="${p.prestaciones?1:0}" style="border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:12px"><div class="ae">🎁</div><div class="an"><b>Prestaciones sociales</b><small>Prima, cesantías, intereses, vacaciones</small></div><div class="as"><div class="tgl" style="background:${p.prestaciones?'var(--emerald)':'var(--surface-3)'}"><i style="left:${p.prestaciones?'21px':'3px'}"></i></div></div></div>
-  <div class="field"><label>Fecha de ingreso al trabajo (opcional)</label><input id="pJobStart" type="date" value="${p.jobStart||''}"><span class="hint">Para calcular tus prestaciones con exactitud.</span></div>
+  <div class="field"><label>Fecha de ingreso al trabajo (opcional)</label><input id="pJobStart" type="date" value="${p.jobStart||''}"><span class="hint">Para contar tus prestaciones desde tu fecha cero.</span></div>
+  <div class="frow"><div class="field"><label>Cesantías ya acumuladas</label><input id="pCesIni" inputmode="numeric" placeholder="0" value="${p.cesantiasInicial?p.cesantiasInicial.toLocaleString('es-CO'):''}" oninput="moneyInput(this)"></div><div class="field"><label>Días de vacaciones</label><input id="pVacIni" inputmode="numeric" placeholder="0" value="${p.vacacionesInicial||''}"></div></div>
+  <div class="field" style="margin-top:-6px"><span class="hint">Lo que YA tienes de años anteriores, para no empezar de cero.</span></div>
   <div class="field"><label>Meta de ahorro %</label><input id="pRate" inputmode="numeric" value="${p.savingsRate}"></div>
   <div class="divlab">¿Cada cuánto te pagan el salario?</div>${payEditor(PF.freq,PF.paydays,'pfreq')}
   <div class="field"><label>Rendimiento anual esperado % (para proyecciones)</label><input id="pRet" inputmode="decimal" value="${p.retRate||11}"><span class="hint">Referencia Colombia: CDT/inflación ~10-12% E.A.</span></div>
@@ -2270,7 +2343,10 @@ function saveProfile(){
   p.deduct=$('#pDeduct')?$('#pDeduct').getAttribute('data-on')==='1':false;
   p.prestaciones=$('#pPresto')?$('#pPresto').getAttribute('data-on')==='1':false;
   p.jobStart=val('pJobStart')||'';
+  p.cesantiasInicial=parseNum(val('pCesIni'));
+  p.vacacionesInicial=parseInt(val('pVacIni'))||0;
   p.income=netIncome(p);
+  if((p.salaryBase||0)>0&&!p.salarySince)p.salarySince=todayISO();
   p.payFreq=PF.freq;p.paydays=readPaydays(PF.freq);
   p.savingsRate=clamp(parseInt(val('pRate'))||0,0,90);p.retRate=parseFloat(val('pRet'))||11;
   closeSheet();commit();
@@ -2281,6 +2357,7 @@ function finishOnboarding(){
   S.profile.name=(OB.name||'').trim();
   S.profile.income=parseNum(OB.income);
   S.profile.salaryBase=parseNum(OB.income);
+  if(parseNum(OB.income)>0)S.profile.salarySince=todayISO();
   S.profile.savingsRate=OB.rate;
   S.profile.payFreq=OB.payFreq||'monthly';
   S.profile.paydays=(OB.paydays&&OB.paydays.length?OB.paydays:defaultPaydays(S.profile.payFreq));
@@ -2361,6 +2438,10 @@ document.addEventListener('click',e=>{
     case 'deducttoggle':{const on=t.getAttribute('data-on')==='1'?'0':'1';t.setAttribute('data-on',on);const k=t.querySelector('.tgl');if(k){k.style.background=on==='1'?'var(--emerald)':'var(--surface-3)';const dot=k.firstElementChild;if(dot)dot.style.left=on==='1'?'21px':'3px';}updateNetPreview();break;}
     case 'prestogtoggle':{const on=t.getAttribute('data-on')==='1'?'0':'1';t.setAttribute('data-on',on);const k=t.querySelector('.tgl');if(k){k.style.background=on==='1'?'var(--emerald)':'var(--surface-3)';const dot=k.firstElementChild;if(dot)dot.style.left=on==='1'?'21px':'3px';}break;}
     case 'sharemonth': exportMonthImage(parseInt(t.dataset.off)||0); break;
+    case 'confirmpay': sheetConfirmPay(t.dataset.k); break;
+    case 'confirmquick': confirmQuick(t.dataset.k); break;
+    case 'confirmpaysave': confirmPaySave(t.dataset.k); break;
+    case 'skipconfirm': skipConfirm(t.dataset.k); break;
     case 'pickphoto': pickPhoto(); break;
     case 'rmphoto': removePhoto(); break;
     case 'budgets': sheetBudgets(); break;
